@@ -1,0 +1,13 @@
+# Segredos: nunca versionar
+.env
+
+# Build e IDE
+bin/
+obj/
+.vs/
+*.user
+TestResults/
+coverage/
+
+# Dados baixados da CGU (públicos, grandes e regeráveis com a Carga)
+dados_cgu/

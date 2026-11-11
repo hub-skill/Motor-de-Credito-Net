@@ -1,0 +1,91 @@
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using MotorCredito.Core.Configuracao;
+using MotorCredito.Core.Listas;
+
+namespace MotorCredito.IntegrationTests;
+
+/// <summary>Sobe a API em memória com um repositório falso: os testes nunca tocam os bancos reais.</summary>
+public sealed class ApiFactory : WebApplicationFactory<Program>
+{
+    public const string ChaveDeTeste = "chave-de-teste-com-pelo-menos-32-caracteres";
+
+    public RepositorioFalso Repositorio { get; } = new();
+
+    public RelogioFixo Relogio { get; } = new(new DateTimeOffset(2026, 11, 10, 12, 0, 0, TimeSpan.Zero));
+
+    static ApiFactory()
+    {
+        // Não carrega o .env local: a configuração dos testes não depende da máquina.
+        Environment.SetEnvironmentVariable(ArquivoEnv.VariavelDeControle, "off");
+    }
+
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        builder.UseSetting("Api:ApiKey", ChaveDeTeste);
+        builder.UseSetting("Api:RequestTimeoutSeconds", "1");
+        builder.UseSetting("Api:RateLimitPorMinuto", "10000");
+        builder.ConfigureTestServices(servicos =>
+        {
+            servicos.RemoveAll<IRepositorioListas>();
+            servicos.AddSingleton<IRepositorioListas>(Repositorio);
+            servicos.RemoveAll<TimeProvider>();
+            servicos.AddSingleton<TimeProvider>(Relogio);
+        });
+    }
+}
+
+public sealed class RelogioFixo(DateTimeOffset agora) : TimeProvider
+{
+    public override DateTimeOffset GetUtcNow() => agora;
+
+    public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.Utc;
+}
+
+public sealed class RepositorioFalso : IRepositorioListas
+{
+    public Dictionary<string, List<Sancao>> Sancoes { get; } = new(StringComparer.Ordinal);
+
+    public Dictionary<string, List<RegistroPep>> Peps { get; } = new(StringComparer.Ordinal);
+
+    public List<string> ConsultasPep { get; } = [];
+
+    public bool Falhar { get; set; }
+
+    public TimeSpan Atraso { get; set; }
+
+    public void Limpar()
+    {
+        Sancoes.Clear();
+        Peps.Clear();
+        ConsultasPep.Clear();
+        Falhar = false;
+        Atraso = TimeSpan.Zero;
+    }
+
+    public async Task<IReadOnlyList<Sancao>> BuscarSancoesAsync(string documento, CancellationToken cancellationToken)
+    {
+        if (Falhar)
+        {
+            throw new BancoIndisponivelException();
+        }
+
+        await Task.Delay(Atraso, cancellationToken);
+        return Sancoes.GetValueOrDefault(documento) ?? [];
+    }
+
+    public Task<IReadOnlyList<RegistroPep>> BuscarPepsPorMioloAsync(string miolo, CancellationToken cancellationToken)
+    {
+        ConsultasPep.Add(miolo);
+        return Task.FromResult<IReadOnlyList<RegistroPep>>(Peps.GetValueOrDefault(miolo) ?? []);
+    }
+
+    public Task<OrigemDados> ObterOrigemAsync(CancellationToken cancellationToken) =>
+        Task.FromResult(new OrigemDados("falso", ["20261110_CEIS.csv"], new DateTimeOffset(2026, 11, 10, 7, 0, 0, TimeSpan.Zero)));
+
+    public Task VerificarAsync(CancellationToken cancellationToken) =>
+        Falhar ? throw new BancoIndisponivelException() : Task.CompletedTask;
+}

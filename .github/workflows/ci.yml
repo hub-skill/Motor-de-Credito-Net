@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [dev, staging]
+  pull_request:
+    branches: [dev, staging]
+
+permissions:
+  contents: read
+
+jobs:
+  verificacoes:
+    name: verificacoes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restaurar pacotes
+        run: dotnet restore MotorCredito.slnx
+
+      - name: Formatação (dotnet format)
+        run: dotnet format MotorCredito.slnx --verify-no-changes --no-restore
+
+      - name: Build (avisos como erro)
+        run: dotnet build MotorCredito.slnx -c Release --no-restore
+
+      # Sem bancos: os testes da categoria Bancos rodam localmente, com PostgreSQL e Oracle.
+      - name: Testes (unitários e integração)
+        run: dotnet test MotorCredito.slnx -c Release --no-build --filter "Categoria!=Bancos" --collect:"XPlat Code Coverage"
+
+      - name: Pacotes vulneráveis (inclui transitivos)
+        run: |
+          dotnet list MotorCredito.slnx package --vulnerable --include-transitive | tee vulneraveis.txt
+          if grep -q -i "has the following vulnerable packages" vulneraveis.txt; then exit 1; fi

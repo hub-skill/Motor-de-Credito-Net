@@ -1,0 +1,25 @@
+using System.ComponentModel.DataAnnotations;
+
+namespace MotorCredito.Api.Configuration;
+
+public sealed class ApiSettings
+{
+    public const string SectionName = "Api";
+
+    // Vazia ou curta demais: a aplicação não sobe (ValidateOnStart).
+    // Defina via variável de ambiente ou .env: Api__ApiKey
+    [Required, MinLength(32)]
+    public string ApiKey { get; init; } = string.Empty;
+
+    public string[] AllowedOrigins { get; init; } = [];
+
+    public string[] AllowedHosts { get; init; } = ["localhost"];
+
+    [Range(1, 60)]
+    public double RequestTimeoutSeconds { get; init; } = 10;
+
+    [Range(1, 100_000)]
+    public int RateLimitPorMinuto { get; init; } = 60;
+
+    public bool EnableDocs { get; init; }
+}

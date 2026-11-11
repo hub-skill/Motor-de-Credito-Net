@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MotorCredito.Api/MotorCredito.Api.csproj" />
+    <Project Path="src/MotorCredito.Carga/MotorCredito.Carga.csproj" />
+    <Project Path="src/MotorCredito.Core/MotorCredito.Core.csproj" />
+    <Project Path="src/MotorCredito.Dados/MotorCredito.Dados.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MotorCredito.BancosTests/MotorCredito.BancosTests.csproj" />
+    <Project Path="tests/MotorCredito.IntegrationTests/MotorCredito.IntegrationTests.csproj" />
+    <Project Path="tests/MotorCredito.UnitTests/MotorCredito.UnitTests.csproj" />
+  </Folder>
+</Solution>
