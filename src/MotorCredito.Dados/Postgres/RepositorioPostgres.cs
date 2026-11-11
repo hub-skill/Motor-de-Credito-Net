@@ -24,6 +24,9 @@ public static class ConexoesPostgres
             Username = usuario,
             Password = senha,
             SslMode = Enum.Parse<SslMode>(settings.SslMode, ignoreCase: true),
+            // Sem Kerberos: o padrão (Prefer) tenta carregar a libgssapi, que não existe na imagem chiseled,
+            // e gasta uma ida e volta a mais por conexão.
+            GssEncryptionMode = GssEncryptionMode.Disable,
             Timeout = 5,
             ApplicationName = aplicacao,
             MaxPoolSize = 5,

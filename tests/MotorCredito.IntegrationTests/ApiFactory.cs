@@ -57,6 +57,9 @@ public sealed class RepositorioFalso : IRepositorioListas
 
     public TimeSpan Atraso { get; set; }
 
+    /// <summary>Exceção lançada na busca de sanções (para provocar 504 do banco ou erro 500 inesperado).</summary>
+    public Exception? Lancar { get; set; }
+
     public void Limpar()
     {
         Sancoes.Clear();
@@ -64,6 +67,7 @@ public sealed class RepositorioFalso : IRepositorioListas
         ConsultasPep.Clear();
         Falhar = false;
         Atraso = TimeSpan.Zero;
+        Lancar = null;
     }
 
     public async Task<IReadOnlyList<Sancao>> BuscarSancoesAsync(string documento, CancellationToken cancellationToken)
@@ -71,6 +75,11 @@ public sealed class RepositorioFalso : IRepositorioListas
         if (Falhar)
         {
             throw new BancoIndisponivelException();
+        }
+
+        if (Lancar is not null)
+        {
+            throw Lancar;
         }
 
         await Task.Delay(Atraso, cancellationToken);

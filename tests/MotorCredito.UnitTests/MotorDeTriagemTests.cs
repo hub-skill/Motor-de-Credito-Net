@@ -68,6 +68,20 @@ public sealed class MotorDeTriagemTests
     }
 
     [Fact]
+    public void Separa_sancoes_vigentes_e_encerradas()
+    {
+        var vigente = NovaSancao(cadastro: "CEIS");
+        var encerrada = NovaSancao(fim: new DateOnly(2024, 1, 1), cadastro: "CNEP");
+        var futura = NovaSancao(inicio: new DateOnly(2027, 1, 1), cadastro: "CEIS");
+
+        var r = MotorDeTriagem.Triar(TipoDocumento.Cnpj, null, [vigente, encerrada, futura], [], Hoje);
+
+        Assert.Equal([vigente], r.SancoesVigentes);
+        Assert.Equal([encerrada, futura], r.SancoesEncerradas); // ainda não começou também não vale
+        Assert.Contains("(1 registro(s))", r.Motivos[0].Texto, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Pep_ativo_manda_para_revisao_mesmo_com_acento_e_minusculas()
     {
         var r = MotorDeTriagem.Triar(TipoDocumento.Cpf, "Maria da Sílva", [], [NovoPep()], Hoje);

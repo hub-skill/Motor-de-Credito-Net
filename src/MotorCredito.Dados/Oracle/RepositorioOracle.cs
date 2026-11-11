@@ -36,8 +36,9 @@ public sealed class RepositorioOracle(OracleSettings settings) : IRepositorioLis
         + " union all select arquivo_origem, max(carregado_em) from peps group by arquivo_origem";
 
     // ORA-01013: comando cancelado pelo tempo limite. Os demais: listener, serviço ou conexão perdida.
+    // ORA-50201: o ODP.NET gerenciado embrulha as falhas de rede (ex.: ORA-12541, sem listener) neste código.
     private const int OraCancelado = 1013;
-    private static readonly HashSet<int> OraIndisponivel = [1017, 1033, 1034, 1089, 3113, 3114, 3135, 12154, 12170, 12514, 12537, 12541, 12545, 28000];
+    private static readonly HashSet<int> OraIndisponivel = [1017, 1033, 1034, 1089, 3113, 3114, 3135, 12154, 12170, 12514, 12537, 12541, 12545, 28000, 50201];
 
     private readonly string _conexao = ConexoesOracle.Montar(settings, settings.Usuario, settings.Senha);
 
