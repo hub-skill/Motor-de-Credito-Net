@@ -76,6 +76,13 @@ public sealed class ConfiguracaoTests
         Assert.Equal("60", bloqueada.Headers.RetryAfter?.ToString());
         using var json = JsonDocument.Parse(await bloqueada.Content.ReadAsStringAsync());
         Assert.Equal("http_429", json.RootElement.GetProperty("code").GetString());
+
+        // Com o limite estourado, health e métricas continuam respondendo (probes do Kubernetes).
+        foreach (var rota in new[] { "/health/live", "/health/ready", "/metrics" })
+        {
+            var resposta = await cliente.GetAsync(new Uri(rota, UriKind.Relative));
+            Assert.Equal(HttpStatusCode.OK, resposta.StatusCode);
+        }
     }
 
     [Fact]

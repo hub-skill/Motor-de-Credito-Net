@@ -399,6 +399,47 @@ Observações:
 - Não foi preciso mexer no `pg_hba.conf` nem no listener do Oracle nesta máquina. Se der `no pg_hba.conf entry
   for host "x.x.x.x"`, libere a faixa do Docker (192.168.65.0/24) para o usuário da aplicação.
 
+### Rodar a API no Kubernetes
+
+Validado em 11/11/2026 no Kubernetes v1.36.1 do Docker Desktop (modo kind), com os bancos no Windows. Os
+manifestos ficam em `k8s/` (Kustomize: `base/` e `overlays/local`, `overlays/producao`). Precisa da imagem do
+passo anterior e do `.env.docker`.
+
+```powershell
+# 1) Gerar k8s/ (config.env e segredos.env saem do .env.docker; segredos.env está no .gitignore)
+& "$HOME\.claude\skills\kubernetes\scripts\preparar-k8s.ps1" -Projeto . -Nome motor-credito-net -Linguagem dotnet -Tag 0.1.1
+
+# 2) Modo kind (nó "desktop-control-plane"): levar a imagem ao nó. Rode no bash (o pipe do PowerShell 5.1 corrompe o tar)
+docker save motor-credito-net:0.1.1 | docker exec -i desktop-control-plane ctr -n k8s.io images import --all-platforms -
+
+# 3) Publicar e conferir
+kubectl apply -f k8s/overlays/local/namespace.yaml
+kubectl apply -k k8s/overlays/local
+kubectl -n motor-credito-net rollout status deploy/motor-credito-net --timeout=180s
+kubectl -n motor-credito-net get pods                      # 1/1 Running, RESTARTS 0
+
+# 4) Acessar e testar (http://localhost:9082)
+kubectl -n motor-credito-net port-forward svc/motor-credito-net 9082:80
+dotnet run --project src/MotorCredito.Carga -- testar-api --url http://localhost:9082
+
+# Remover
+kubectl delete -k k8s/overlays/local
+```
+
+Resultados da validação: triagem real igual à do container e `testar-api` 8/8; `rollout restart` com tráfego
+contínuo pelo Service, 622 chamadas e 0 falhas; versão com o banco inacessível nunca fica pronta (readiness 503) e o
+pod antigo segue atendendo, sem reinícios.
+
+- Cada mudança de código pede **tag nova**: importe a imagem e troque o `newTag` em
+  `k8s/overlays/local/kustomization.yaml` (ou passe `-Tag` ao script).
+- `/health/live`, `/health/ready` e `/metrics` ficam **fora do rate limit**. As probes do Kubernetes saem todas do
+  IP do nó: com o limite por IP valendo para elas, um 429 na liveness reiniciaria o pod saudável (aconteceu no
+  primeiro teste de troca: 169 respostas 429). Há teste automatizado disso.
+- O limite `Api__RateLimitPorMinuto` é **por pod** e em memória: com N réplicas o limite real é N vezes maior.
+- A imagem chiseled não tem shell: `kubectl exec` não funciona. Diagnostique por `kubectl logs`, `describe` e eventos.
+- Conexões no banco = réplicas × pool (5). No overlay `local` há 1 réplica; o HPA (2 a 6) só existe na `base` e no
+  `producao`. O Docker Desktop não traz metrics-server nem aplica NetworkPolicy.
+
 ---
 
 ## 9. Configuração
