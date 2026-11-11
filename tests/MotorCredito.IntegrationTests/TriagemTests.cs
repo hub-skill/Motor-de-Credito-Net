@@ -164,6 +164,31 @@ public sealed class TriagemTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public async Task Banco_expirou_responde_504_banco_timeout()
+    {
+        _fabrica.Repositorio.Lancar = new BancoExpirouException();
+        var resposta = await ClienteAutenticado().PostAsJsonAsync(Url, new { documento = CpfValido });
+
+        Assert.Equal(HttpStatusCode.GatewayTimeout, resposta.StatusCode);
+        Assert.Equal("banco_timeout", (await Json(resposta)).GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task Erro_inesperado_responde_500_generico_sem_vazar_detalhes()
+    {
+        _fabrica.Repositorio.Lancar = new InvalidOperationException("detalhe interno: senha=abc tabela=credito_net.sancoes");
+        var resposta = await ClienteAutenticado().PostAsJsonAsync(Url, new { documento = CpfValido });
+        var texto = await resposta.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.InternalServerError, resposta.StatusCode);
+        using var json = JsonDocument.Parse(texto);
+        Assert.Equal("erro_interno", json.RootElement.GetProperty("code").GetString());
+        Assert.False(string.IsNullOrEmpty(json.RootElement.GetProperty("request_id").GetString()));
+        Assert.DoesNotContain("detalhe interno", texto, StringComparison.Ordinal);
+        Assert.DoesNotContain("InvalidOperationException", texto, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Health_e_headers_de_seguranca()
     {
         var cliente = _fabrica.CreateClient();

@@ -110,6 +110,9 @@ public sealed class BancosTests
         var r = await ComparadorDeCargas.CompararAsync(con, "postgres", "antiga", "nova", LayoutsCgu.Peps, null, CancellationToken.None);
 
         Assert.False(r.Igual);
+        Assert.Equal(("postgres", "peps", 3, 3), (r.Banco, r.Tabela, r.Antigos, r.Novos));
+        Assert.Equal(["f.csv"], r.ArquivosAntigos);
+        Assert.True(r.MesmosArquivos);
         Assert.Equal(1, r.Identicos);
         Assert.Equal(2, r.SoNoAntigo);
         Assert.Equal(2, r.SoNoNovo);
