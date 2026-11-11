@@ -356,6 +356,49 @@ Register-ScheduledTask -TaskName "MotorCredito-CargaCGU" -Action $acao `
 
 A API não precisa ser reiniciada após a carga. A origem informada em `fonte` é atualizada em até 5 minutos.
 
+### Rodar a API em container (Docker)
+
+Validado em 11/11/2026 com Docker Desktop 29.9.3 no Windows, com PostgreSQL e Oracle rodando no próprio
+Windows. Imagem final: 258 MB (`aspnet:10.0-noble-chiseled-extra`, sem shell), usuário não root (UID 1654) e zero
+vulnerabilidades HIGH/CRITICAL corrigíveis (trivy 0.58.1). A ferramenta de carga não entra na imagem: continua
+rodando no Windows.
+
+```powershell
+cd "C:\Felipe\Programacao\DotNet\APIs\Motor-de-Credito-Net"
+
+# 1) Construir a imagem (o .dockerignore deixa .env, bin/obj, tests e a Carga fora)
+docker build -t motor-credito-net:0.1.0 .
+
+# 2) Arquivo de variáveis do container: o .env sem os administradores e com o banco em host.docker.internal
+#    (dentro do container, "localhost" é o próprio container). O .env.docker está no .gitignore.
+$l = Get-Content .env -Encoding utf8 | Where-Object { $_.Trim() -and $_ -notmatch '^\s*#' -and $_ -notmatch '^Admin__' } |
+  ForEach-Object { $_ -replace '^Bancos__Postgres__Host=.*','Bancos__Postgres__Host=host.docker.internal' -replace '^(Bancos__Oracle__DataSource=)(localhost|127\.0\.0\.1)','${1}host.docker.internal' }
+[IO.File]::WriteAllLines("$PWD\.env.docker", [string[]]$l)   # UTF-8 sem BOM (o Set-Content do PowerShell 5.1 grava BOM)
+
+# 3) Subir (porta 8082 do Windows -> 8080 do container)
+docker run -d --name motor-net -p 8082:8080 --env-file .env.docker motor-credito-net:0.1.0
+#    Para consultar o Oracle: acrescente  -e Bancos__Provedor=oracle
+
+# 4) Conferir
+curl.exe http://localhost:8082/health/ready      # Healthy
+dotnet run --project src/MotorCredito.Carga -- testar-api --url http://localhost:8082
+docker logs motor-net --tail 20
+
+# Parar / remover
+docker rm -f motor-net
+```
+
+Observações:
+
+- A imagem chiseled não tem shell nem curl: não use `docker exec ... sh`. Para diagnosticar, veja os logs ou
+  rode um container auxiliar (`docker run --rm busybox:1.37 nc -zv host.docker.internal 5432`).
+- O Npgsql 10 tenta criptografia GSS (Kerberos) por padrão e, na imagem chiseled, registra `Cannot load library
+  libgssapi_krb5.so.2`. A string de conexão usa `GssEncryptionMode=Disable` (não usamos Kerberos).
+- Com o banco inacessível, `/health/live` continua 200, `/health/ready` dá 503 e a triagem responde
+  `503 banco_indisponivel` em cerca de 0,1 s.
+- Não foi preciso mexer no `pg_hba.conf` nem no listener do Oracle nesta máquina. Se der `no pg_hba.conf entry
+  for host "x.x.x.x"`, libere a faixa do Docker (192.168.65.0/24) para o usuário da aplicação.
+
 ---
 
 ## 9. Configuração
