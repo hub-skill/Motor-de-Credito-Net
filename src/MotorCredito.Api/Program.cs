@@ -77,10 +77,15 @@ builder.Services.AddAuthorization(opcoes =>
 builder.Services.AddRateLimiter(opcoes =>
 {
     opcoes.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    opcoes.OnRejected = (contexto, _) =>
+    opcoes.OnRejected = async (contexto, cancelamento) =>
     {
         contexto.HttpContext.Response.Headers.RetryAfter = "60";
-        return ValueTask.CompletedTask;
+        await RespostaDeErro.EscreverAsync(
+            contexto.HttpContext,
+            StatusCodes.Status429TooManyRequests,
+            "limite_excedido",
+            "Muitas requisições. Tente mais tarde.",
+            cancelamento);
     };
     opcoes.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(contexto =>
         RateLimitPartition.GetFixedWindowLimiter(
@@ -93,14 +98,18 @@ builder.Services.AddRateLimiter(opcoes =>
             }));
 });
 
-// Erros padronizados (RFC 7807), sempre com "code" e "request_id", inclusive 401, 404 e 429.
-builder.Services.AddProblemDetails(opcoes => opcoes.CustomizeProblemDetails = contexto =>
-{
-    var status = contexto.ProblemDetails.Status ?? contexto.HttpContext.Response.StatusCode;
-    contexto.ProblemDetails.Extensions.TryAdd("code", string.Create(CultureInfo.InvariantCulture, $"http_{status}"));
-    contexto.ProblemDetails.Extensions.TryAdd("request_id", contexto.HttpContext.TraceIdentifier);
-});
+// Erros padronizados (RFC 9457), o mesmo formato do Motor Python: sempre exatamente title, status, code e
+// request_id, em application/problem+json. Tudo sai por RespostaDeErro: os de domínio (ErroDeDominioHandler), o
+// 429 (rate limit) e os genéricos do framework (UseStatusCodePages). O AddProblemDetails abaixo existe só porque
+// o UseExceptionHandler() exige; não é usado para escrever respostas, pois acrescentaria campos próprios (type,
+// traceId) e o corpo deixaria de ser igual ao do Motor Python.
+builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<ErroDeDominioHandler>();
+
+// JSON malformado e outros erros de requisição viram BadHttpRequestException -> ErroDeDominioHandler
+// (400 requisicao_invalida) em QUALQUER ambiente. Por padrão o minimal API só lança a exceção em Development;
+// em Production ele devolvia 400 sem corpo, que saía como http_400 / "Bad Request".
+builder.Services.Configure<RouteHandlerOptions>(opcoes => opcoes.ThrowOnBadRequest = true);
 
 // Proxies: adicione os IPs confiáveis em KnownProxies. Sem isso, X-Forwarded-* é ignorado.
 builder.Services.Configure<ForwardedHeadersOptions>(opcoes =>
@@ -124,7 +133,7 @@ builder.Services.AddOpenTelemetry()
 var app = builder.Build();
 
 app.UseExceptionHandler();
-app.UseStatusCodePages();
+app.UseStatusCodePages(contexto => RespostaDeErro.EscreverGenericoAsync(contexto.HttpContext));
 app.UseHostFiltering();
 app.UseMiddleware<SecurityHeadersMiddleware>();
 app.Use(async (contexto, proximo) =>

@@ -83,9 +83,10 @@ Exemplo de resposta (resumida), em snake_case como a API Python:
 }
 ```
 
-Erros seguem o padrão ProblemDetails (RFC 7807), sempre com `code` e `request_id`:
-401 `http_401`, 413 `corpo_muito_grande`, 422 `entrada_invalida`, 429 `http_429`,
-503 `banco_indisponivel`, 504 `timeout` / `banco_timeout`.
+Erros seguem o padrão Problem Details (RFC 9457), o mesmo do Motor Python: `application/problem+json` com exatamente
+`title`, `status`, `code` e `request_id`. Códigos: 400 `requisicao_invalida`, 401 `http_401`, 404 `http_404`,
+405 `http_405`, 413 `corpo_muito_grande`, 422 `entrada_invalida`, 429 `limite_excedido`,
+500 `erro_interno`, 503 `banco_indisponivel`, 504 `timeout` / `banco_timeout`.
 
 ## Testes e verificações
 

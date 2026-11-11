@@ -251,7 +251,9 @@ Exemplo – pessoa exposta politicamente:
 
 ## 6. Erros
 
-Formato único (RFC 7807 – ProblemDetails), sempre com `code` e `request_id`:
+Formato único, **o mesmo do Motor Python**: RFC 9457 (Problem Details), com `Content-Type: application/problem+json`
+e exatamente quatro campos: `title` (texto para pessoas), `status` (o mesmo código HTTP), `code` (para o seu programa
+decidir o que fazer) e `request_id`. Decida sempre pelo `code` (ou pelo `status`), nunca pelo texto do `title`:
 
 ```json
 {
@@ -267,9 +269,10 @@ Formato único (RFC 7807 – ProblemDetails), sempre com `code` e `request_id`:
 | 400 | `requisicao_invalida` | JSON malformado | Corrigir o corpo |
 | 401 | `http_401` | Sem `X-API-Key` ou chave errada | Conferir a chave |
 | 404 | `http_404` | Rota inexistente (com chave válida) | Conferir a URL |
+| 405 | `http_405` | Método não permitido (a triagem é só `POST`) | Usar `POST` |
 | 413 | `corpo_muito_grande` | Corpo acima de 4 KB | Enviar só `documento` e `nome` |
 | 422 | `entrada_invalida` | Documento inválido ou nome com caracteres de controle | Corrigir a entrada; **não repetir** |
-| 429 | `http_429` | Limite de requisições atingido | Esperar `Retry-After` segundos |
+| 429 | `limite_excedido` | Limite de requisições atingido | Esperar `Retry-After` segundos |
 | 500 | `erro_interno` | Erro inesperado | Informar o `request_id` ao suporte |
 | 503 | `banco_indisponivel` | Banco fora do ar | Tentar de novo depois (com espera crescente) |
 | 504 | `banco_timeout` / `timeout` | Banco ou processamento lento demais | Tentar de novo depois |

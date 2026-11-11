@@ -22,6 +22,7 @@ public sealed class ApiFactoryConfiguravel(IReadOnlyDictionary<string, string> c
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        builder.UseEnvironment("Production"); // como na produção (ver ApiFactory)
         builder.UseSetting("Api:ApiKey", ApiFactory.ChaveDeTeste);
         foreach (var (chave, valor) in configuracao)
         {
@@ -72,10 +73,8 @@ public sealed class ConfiguracaoTests
         }
 
         var bloqueada = await cliente.PostAsJsonAsync(Url, new { documento = "52998224725" });
-        Assert.Equal(HttpStatusCode.TooManyRequests, bloqueada.StatusCode);
+        await ContratoDeErro.AfirmarProblema(bloqueada, HttpStatusCode.TooManyRequests, "limite_excedido");
         Assert.Equal("60", bloqueada.Headers.RetryAfter?.ToString());
-        using var json = JsonDocument.Parse(await bloqueada.Content.ReadAsStringAsync());
-        Assert.Equal("http_429", json.RootElement.GetProperty("code").GetString());
 
         // Com o limite estourado, health e métricas continuam respondendo (probes do Kubernetes).
         foreach (var rota in new[] { "/health/live", "/health/ready", "/metrics" })
