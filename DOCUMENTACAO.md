@@ -284,6 +284,29 @@ Python: a API não revela quais rotas existem.
 **Repetir ou não?** Repita só 429, 503 e 504, com espera crescente (ex.: 1 s, 2 s, 4 s). Nunca repita 4xx de
 entrada (400, 413, 422): o resultado será o mesmo.
 
+### Log de erros no banco
+
+Toda resposta de erro (4xx e 5xx) é gravada na tabela `log_erros`, no mesmo banco que a API estiver usando:
+
+| Banco | Tabela |
+|---|---|
+| PostgreSQL | `credito_net.log_erros` |
+| Oracle | `motor_credito_net.log_erros` |
+
+Colunas: `ocorrido_em`, `request_id` (o mesmo devolvido ao cliente), `metodo`, `rota`, `status`, `codigo`, `titulo`,
+`tipo_excecao` (só no 500), `duracao_ms` e `ambiente` (`ASPNETCORE_ENVIRONMENT`). **Nunca** grava CPF, CNPJ, nome ou o corpo da
+requisição. As tabelas são criadas por `dotnet run --project src/MotorCredito.Carga -- migrar` (fim do `01_schema_net.sql`).
+
+- A resposta não espera o banco: o erro entra numa fila em memória (até 1000) e é gravado em lotes de até 100.
+  Com o banco fora ou lento, a fila enche e os registros a mais são descartados (aviso no log da aplicação);
+  a API continua respondendo normalmente. Ao desligar, a API grava o que ainda estiver na fila (até 5 s).
+- O usuário da aplicação (`motor_app_net / MOTOR_APP_NET`) só tem **INSERT** nessa tabela: não lê, não altera e não apaga. Consultas e
+  limpeza são feitas por um administrador.
+- Para achar o erro que um cliente relatou: `select * from credito_net.log_erros where request_id = '<request_id>'`.
+- Limpeza (o volume cresce com varreduras e clientes integrando errado). Exemplo, manter 90 dias:
+  `delete from credito_net.log_erros where ocorrido_em < now() - interval '90 days'` (PostgreSQL) ou
+  `DELETE FROM motor_credito_net.log_erros WHERE ocorrido_em < SYSTIMESTAMP - INTERVAL '90' DAY` (Oracle).
+
 ---
 
 ## 7. Exemplos de integração
@@ -471,8 +494,8 @@ No .NET, `__` separa seções: `Bancos__Postgres__Host` equivale a `Bancos:Postg
 
 | Banco | Schema | Tabelas | Usuário da aplicação |
 |---|---|---|---|
-| PostgreSQL (`motor_credito`) | `credito_net` | `sancoes`, `peps` | `motor_app_net` |
-| Oracle (`XEPDB1`) | `MOTOR_CREDITO_NET` (sem login) | `SANCOES`, `PEPS` | `MOTOR_APP_NET` (sinônimos) |
+| PostgreSQL (`motor_credito`) | `credito_net` | `sancoes`, `peps`, `log_erros` (só INSERT) | `motor_app_net` |
+| Oracle (`XEPDB1`) | `MOTOR_CREDITO_NET` (sem login) | `SANCOES`, `PEPS`, `LOG_ERROS` (só INSERT) | `MOTOR_APP_NET` (sinônimos) |
 
 Consultas manuais (pgAdmin, SQL Developer) usam o schema na frente: `select * from credito_net.peps` /
 `select * from motor_credito_net.peps`. No SQL Developer, conecte por **Nome do Serviço** `XEPDB1`.

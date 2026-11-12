@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using System.Threading.RateLimiting;
@@ -54,12 +55,18 @@ builder.Services.AddSingleton(bancos);
 if (bancos.UsaOracle)
 {
     builder.Services.AddSingleton<IRepositorioListas>(_ => new RepositorioOracle(bancos.Oracle));
+    builder.Services.AddSingleton<IRepositorioDeErros>(_ => new LogDeErrosOracle(bancos.Oracle));
 }
 else
 {
     builder.Services.AddSingleton(_ => ConexoesPostgres.CriarFonteDeLeitura(bancos.Postgres));
     builder.Services.AddSingleton<IRepositorioListas, RepositorioPostgres>();
+    builder.Services.AddSingleton<IRepositorioDeErros, LogDeErrosPostgres>();
 }
+
+// Log de erros (tabela log_erros): toda resposta 4xx/5xx entra numa fila e é gravada em lotes, em segundo plano.
+builder.Services.AddSingleton<FilaDeErros>();
+builder.Services.AddHostedService<GravadorDeErros>();
 
 // Serviços e validação
 builder.Services.AddSingleton(TimeProvider.System);
@@ -133,6 +140,11 @@ builder.Services.AddOpenTelemetry()
 
 var app = builder.Build();
 
+app.Use((contexto, proximo) =>
+{
+    contexto.Items[RespostaDeErro.ChaveDoInicio] = Stopwatch.GetTimestamp(); // duração no log de erros
+    return proximo(contexto);
+});
 app.UseExceptionHandler();
 app.UseStatusCodePages(contexto => RespostaDeErro.EscreverGenericoAsync(contexto.HttpContext));
 app.UseHostFiltering();

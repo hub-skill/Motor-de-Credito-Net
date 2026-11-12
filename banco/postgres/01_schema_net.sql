@@ -140,3 +140,46 @@ alter default privileges in schema credito_net
 alter default privileges in schema credito_net
     grant usage, select on sequences to motor_app_net;
 alter role motor_app_net in database motor_credito set search_path = credito_net;
+
+-- -----------------------------------------------------------------------------
+-- Log de erros da API .NET: uma linha por resposta 4xx/5xx. Só metadados: NUNCA CPF, CNPJ,
+-- nome ou corpo da requisição. A aplicação (motor_app_net) só INSERE; não lê, altera nem apaga.
+-- Limpeza (como administrador), ex.: manter 90 dias:
+--   delete from credito_net.log_erros where ocorrido_em < now() - interval '90 days';
+-- -----------------------------------------------------------------------------
+create table if not exists credito_net.log_erros (
+    id            bigint        generated always as identity,
+    ocorrido_em   timestamptz   not null default now(),
+    request_id    varchar(64)   not null,
+    metodo        varchar(10)   not null,
+    rota          varchar(200)  not null,
+    status        smallint      not null,
+    codigo        varchar(40)   not null,
+    titulo        varchar(200)  not null,
+    tipo_excecao  varchar(200),
+    duracao_ms    integer,
+    ambiente      varchar(20)   not null,
+
+    constraint pk_log_erros          primary key (id),
+    constraint ck_log_erros_status   check (status between 400 and 599),
+    constraint ck_log_erros_duracao  check (duracao_ms >= 0)
+);
+
+create index if not exists idx_log_erros_ocorrido_em on credito_net.log_erros (ocorrido_em);
+
+comment on table  credito_net.log_erros              is 'Respostas de erro (4xx e 5xx) da API .NET. Só metadados, sem dados pessoais.';
+comment on column credito_net.log_erros.id           is 'Identificador interno.';
+comment on column credito_net.log_erros.ocorrido_em  is 'Momento da gravação (alguns milissegundos depois da resposta).';
+comment on column credito_net.log_erros.request_id   is 'Mesmo request_id devolvido ao cliente no corpo do erro e no header X-Request-ID.';
+comment on column credito_net.log_erros.metodo       is 'Método HTTP (POST, GET...).';
+comment on column credito_net.log_erros.rota         is 'Caminho pedido, sem query string (truncado em 200 caracteres).';
+comment on column credito_net.log_erros.status       is 'Status HTTP da resposta (400 a 599).';
+comment on column credito_net.log_erros.codigo       is 'Campo code do erro (ex.: entrada_invalida, banco_indisponivel).';
+comment on column credito_net.log_erros.titulo       is 'Campo title do erro.';
+comment on column credito_net.log_erros.tipo_excecao is 'Tipo da exceção, só em erro_interno (500). O stack trace fica no log da aplicação.';
+comment on column credito_net.log_erros.duracao_ms   is 'Tempo da requisição até o erro, em milissegundos.';
+comment on column credito_net.log_erros.ambiente     is 'Ambiente da API .NET (ASPNETCORE_ENVIRONMENT: Development, Staging, Production).';
+
+-- A aplicação só insere. Os privilégios padrão do schema dariam select/update/delete: retirados aqui.
+revoke all on credito_net.log_erros from motor_app_net;
+grant insert on credito_net.log_erros to motor_app_net;

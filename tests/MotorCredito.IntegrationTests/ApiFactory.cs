@@ -15,6 +15,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
     public RepositorioFalso Repositorio { get; } = new();
 
+    /// <summary>Recebe o que a API grava no log de erros (no lugar da tabela log_erros).</summary>
+    public DestinoDeErrosFalso Erros { get; } = new();
+
     public RelogioFixo Relogio { get; } = new(new DateTimeOffset(2026, 11, 10, 12, 0, 0, TimeSpan.Zero));
 
     static ApiFactory()
@@ -35,6 +38,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         {
             servicos.RemoveAll<IRepositorioListas>();
             servicos.AddSingleton<IRepositorioListas>(Repositorio);
+            servicos.RemoveAll<IRepositorioDeErros>();
+            servicos.AddSingleton<IRepositorioDeErros>(Erros);
             servicos.RemoveAll<TimeProvider>();
             servicos.AddSingleton<TimeProvider>(Relogio);
         });
@@ -100,4 +105,60 @@ public sealed class RepositorioFalso : IRepositorioListas
 
     public Task VerificarAsync(CancellationToken cancellationToken) =>
         Falhar ? throw new BancoIndisponivelException() : Task.CompletedTask;
+}
+
+/// <summary>Destino falso do log de erros: guarda os registros e, se pedido, falha.</summary>
+public sealed class DestinoDeErrosFalso : IRepositorioDeErros
+{
+    private readonly System.Collections.Concurrent.ConcurrentQueue<RegistroDeErro> _registros = new();
+
+    public int FalharVezes { get; set; }
+
+    public List<int> TamanhosDosLotes { get; } = [];
+
+    public IReadOnlyList<RegistroDeErro> Registros => [.. _registros];
+
+    public void Limpar()
+    {
+        _registros.Clear();
+        TamanhosDosLotes.Clear();
+        FalharVezes = 0;
+    }
+
+    public Task GravarAsync(IReadOnlyList<RegistroDeErro> registros, CancellationToken cancellationToken)
+    {
+        if (FalharVezes > 0)
+        {
+            FalharVezes--;
+            throw new InvalidOperationException("banco fora: senha=abc");
+        }
+
+        lock (TamanhosDosLotes)
+        {
+            TamanhosDosLotes.Add(registros.Count);
+        }
+
+        foreach (var r in registros)
+        {
+            _registros.Enqueue(r);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Espera (até 5 s) chegar o registro com este request_id: a gravação é assíncrona.</summary>
+    public async Task<RegistroDeErro> EsperarAsync(string requestId)
+    {
+        using var prazo = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (true)
+        {
+            var achado = _registros.FirstOrDefault(r => r.RequestId == requestId);
+            if (achado is not null)
+            {
+                return achado;
+            }
+
+            await Task.Delay(10, prazo.Token);
+        }
+    }
 }

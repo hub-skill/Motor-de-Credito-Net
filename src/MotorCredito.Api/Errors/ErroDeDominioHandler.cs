@@ -38,7 +38,9 @@ public sealed partial class ErroDeDominioHandler(ILogger<ErroDeDominioHandler> l
             LogErroNaoTratado(logger, exception);
         }
 
-        await RespostaDeErro.EscreverAsync(httpContext, status, codigo, mensagem, cancellationToken);
+        // O tipo da exceção vai para o log de erros só no 500 (igual ao Motor Python).
+        var tipoExcecao = status == StatusCodes.Status500InternalServerError ? exception.GetType().FullName : null;
+        await RespostaDeErro.EscreverAsync(httpContext, status, codigo, mensagem, cancellationToken, tipoExcecao);
         return true;
     }
 }
