@@ -93,6 +93,7 @@ public sealed class TriagemTests : IClassFixture<ApiFactory>
     {
         var semChave = await _fabrica.CreateClient().PostAsJsonAsync(Url, new { documento = CpfValido });
         await ContratoDeErro.AfirmarProblema(semChave, HttpStatusCode.Unauthorized, "http_401");
+        Assert.Equal("APIKey", semChave.Headers.WwwAuthenticate.ToString()); // igual ao Motor Python
 
         var cliente = _fabrica.CreateClient();
         cliente.DefaultRequestHeaders.Add("X-API-Key", "errada");
@@ -147,6 +148,7 @@ public sealed class TriagemTests : IClassFixture<ApiFactory>
 
         var pronto = await _fabrica.CreateClient().GetAsync(new Uri("/health/ready", UriKind.Relative));
         Assert.Equal(HttpStatusCode.ServiceUnavailable, pronto.StatusCode);
+        Assert.Equal("banco_indisponivel", (await Json(pronto)).GetProperty("status").GetString());
     }
 
     [Fact]
@@ -187,6 +189,11 @@ public sealed class TriagemTests : IClassFixture<ApiFactory>
 
         Assert.Equal(HttpStatusCode.OK, vivo.StatusCode);
         Assert.Equal(HttpStatusCode.OK, pronto.StatusCode);
+        // Mesmo corpo JSON do Motor Python.
+        Assert.Equal("ok", (await Json(vivo)).GetProperty("status").GetString());
+        var corpoPronto = await Json(pronto);
+        Assert.Equal("ok", corpoPronto.GetProperty("status").GetString());
+        Assert.Equal("postgres", corpoPronto.GetProperty("banco").GetString());
         Assert.Equal("nosniff", vivo.Headers.GetValues("X-Content-Type-Options").Single());
         Assert.Equal("DENY", vivo.Headers.GetValues("X-Frame-Options").Single());
     }
@@ -196,6 +203,17 @@ public sealed class TriagemTests : IClassFixture<ApiFactory>
     {
         var resposta = await ClienteAutenticado().GetAsync(new Uri("/nao-existe", UriKind.Relative));
         await ContratoDeErro.AfirmarProblema(resposta, HttpStatusCode.NotFound, "http_404");
+    }
+
+    [Theory]
+    [InlineData("/nao-existe")]
+    [InlineData(Url)]
+    public async Task Sem_chave_rota_inexistente_ou_metodo_errado_responde_401(string rota)
+    {
+        // Igual ao Motor Python: sem chave, a API não revela quais rotas existem.
+        var resposta = await _fabrica.CreateClient().GetAsync(new Uri(rota, UriKind.Relative));
+        await ContratoDeErro.AfirmarProblema(resposta, HttpStatusCode.Unauthorized, "http_401");
+        Assert.Equal("APIKey", resposta.Headers.WwwAuthenticate.ToString());
     }
 
     [Fact]

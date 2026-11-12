@@ -18,6 +18,9 @@ public sealed class ApiKeyAuthenticationHandler(
     public const string SchemeName = "ApiKey";
     public const string Header = "X-API-Key";
 
+    /// <summary>Valor do header WWW-Authenticate no 401: o mesmo do Motor Python.</summary>
+    public const string DesafioWwwAuthenticate = "APIKey";
+
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
         if (!Request.Headers.TryGetValue(Header, out var valores))
@@ -40,7 +43,7 @@ public sealed class ApiKeyAuthenticationHandler(
 
     protected override Task HandleChallengeAsync(AuthenticationProperties properties)
     {
-        Response.Headers.WWWAuthenticate = SchemeName;
+        Response.Headers.WWWAuthenticate = DesafioWwwAuthenticate;
         return base.HandleChallengeAsync(properties);
     }
 }

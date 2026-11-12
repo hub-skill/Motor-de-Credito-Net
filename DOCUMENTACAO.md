@@ -201,8 +201,8 @@ Exemplo – pessoa exposta politicamente:
 
 | Endpoint | Autenticação | Uso |
 |---|---|---|
-| `GET /health/live` | não | A aplicação está no ar (não consulta o banco). Para o orquestrador reiniciar o processo |
-| `GET /health/ready` | não | A aplicação **e o banco** respondem. `503` se o banco estiver fora. Para o balanceador tirar a instância de rotação |
+| `GET /health/live` | não | A aplicação está no ar: `{"status":"ok"}` (não consulta o banco). Para o orquestrador reiniciar o processo |
+| `GET /health/ready` | não | A aplicação **e o banco** respondem: `{"status":"ok","banco":"postgres"}`; `503` com `{"status":"banco_indisponivel"}` se o banco estiver fora. Para o balanceador tirar a instância de rotação |
 | `GET /metrics` | não | Métricas Prometheus (latência, requisições, erros). **Exponha só na rede interna** |
 | `GET /openapi/v1.json` | não | Contrato OpenAPI. Só existe com `Api__EnableDocs=true` |
 | `GET /scalar` | não | Documentação interativa (testar chamadas pelo navegador). Só com `Api__EnableDocs=true` |
@@ -278,7 +278,8 @@ decidir o que fazer) e `request_id`. Decida sempre pelo `code` (ou pelo `status`
 | 504 | `banco_timeout` / `timeout` | Banco ou processamento lento demais | Tentar de novo depois |
 
 As mensagens de erro **nunca repetem a entrada** (CPF, nome) nem detalhes internos (SQL, tabelas, senhas).
-Sem chave, até rotas inexistentes respondem 401: a API não revela quais rotas existem.
+Sem chave, até rotas inexistentes e métodos errados respondem 401 (com `WWW-Authenticate: APIKey`), como no Motor
+Python: a API não revela quais rotas existem.
 
 **Repetir ou não?** Repita só 429, 503 e 504, com espera crescente (ex.: 1 s, 2 s, 4 s). Nunca repita 4xx de
 entrada (400, 413, 422): o resultado será o mesmo.
@@ -383,7 +384,7 @@ docker run -d --name motor-net -p 8082:8080 --env-file .env.docker motor-credito
 #    Para consultar o Oracle: acrescente  -e Bancos__Provedor=oracle
 
 # 4) Conferir
-curl.exe http://localhost:8082/health/ready      # Healthy
+curl.exe http://localhost:8082/health/ready      # {"status":"ok","banco":"postgres"}
 dotnet run --project src/MotorCredito.Carga -- testar-api --url http://localhost:8082
 docker logs motor-net --tail 20
 

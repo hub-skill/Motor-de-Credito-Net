@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 using MotorCredito.Api.Configuration;
 using MotorCredito.Api.Endpoints.V1;
@@ -161,8 +162,15 @@ if (settings.EnableDocs)
 
 // Health checks anônimos; métricas devem ficar na rede interna.
 // Fora do rate limit: no Kubernetes as probes saem todas do IP do nó; um 429 na liveness reiniciaria o pod.
-app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false }).AllowAnonymous().DisableRateLimiting();
-app.MapHealthChecks("/health/ready").AllowAnonymous().DisableRateLimiting();
+// Corpo em JSON, igual ao do Motor Python.
+var nomeDoBanco = bancos.UsaOracle ? "oracle" : "postgres";
+app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false, ResponseWriter = RespostaDeSaude.Vivo })
+    .AllowAnonymous().DisableRateLimiting();
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    ResponseWriter = (contexto, relatorio) => RespostaDeSaude.Pronto(contexto, relatorio, nomeDoBanco),
+    ResultStatusCodes = { [HealthStatus.Degraded] = StatusCodes.Status503ServiceUnavailable },
+}).AllowAnonymous().DisableRateLimiting();
 app.MapPrometheusScrapingEndpoint("/metrics").AllowAnonymous().DisableRateLimiting();
 
 app.MapTriagemV1();
