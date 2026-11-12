@@ -31,6 +31,12 @@ internal static partial class Comandos
         return 0;
     }
 
+    /// <summary>Scripts do schema, em ordem: tabelas das listas, movimentação e log de erros (depende da movimentação).</summary>
+    public static string[] ScriptsDeMigracao(string pastaDosScripts, string banco) =>
+        [.. NomesDosScripts.Select(arquivo => Path.Combine(pastaDosScripts, banco, arquivo))];
+
+    private static readonly string[] NomesDosScripts = ["01_schema_net.sql", "02_movimentacao.sql", "03_log_erros.sql"];
+
     public static async Task<int> MigrarAsync(Opcoes opcoes, CancellationToken cancellationToken)
     {
         var bancos = BancosSettings.DoAmbiente();
@@ -43,7 +49,7 @@ internal static partial class Comandos
             var conexaoAdmin = ConexoesPostgres.Montar(
                 bancos.Postgres, admin.PostgresUsuario, admin.PostgresSenha, somenteLeitura: false, "motor-credito-net-migracao");
             var passos = await MigradorPostgres.MigrarAsync(
-                conexaoAdmin, bancos.Postgres.Senha, Path.Combine(scripts, "postgres", "01_schema_net.sql"), cancellationToken);
+                conexaoAdmin, bancos.Postgres.Senha, ScriptsDeMigracao(scripts, "postgres"), cancellationToken);
             foreach (var passo in passos)
             {
                 Console.WriteLine($"[ok] {passo}");
@@ -63,7 +69,7 @@ internal static partial class Comandos
             Console.WriteLine("=== Oracle");
             var conexaoAdmin = ConexoesOracle.Montar(bancos.Oracle, admin.OracleUsuario, admin.OracleSenha);
             var passos = MigradorOracle.Migrar(
-                conexaoAdmin, bancos.Oracle.Senha, Path.Combine(scripts, "oracle", "01_schema_net.sql"));
+                conexaoAdmin, bancos.Oracle.Senha, ScriptsDeMigracao(scripts, "oracle"));
             foreach (var passo in passos)
             {
                 Console.WriteLine($"[ok] {passo}");

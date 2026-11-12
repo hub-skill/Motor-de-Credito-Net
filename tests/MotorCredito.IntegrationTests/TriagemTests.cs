@@ -223,4 +223,102 @@ public sealed class TriagemTests : IClassFixture<ApiFactory>
         await ContratoDeErro.AfirmarProblema(resposta, HttpStatusCode.MethodNotAllowed, "http_405");
         Assert.Contains("POST", resposta.Content.Headers.Allow);
     }
+
+    private async Task<HttpResponseMessage> EnviarJsonAsync(string corpo)
+    {
+        using var conteudo = new StringContent(corpo, Encoding.UTF8, "application/json");
+        return await ClienteAutenticado().PostAsync(new Uri(Url, UriKind.Relative), conteudo);
+    }
+
+    /// <summary>Corpo válido com um campo extra aninhado até <paramref name="niveis"/> no total (a raiz conta como 1).</summary>
+    private static string Aninhado(int niveis) =>
+        $"{{\"documento\": \"{CpfValido}\", \"extra\": " + new string('[', niveis - 1) + new string(']', niveis - 1) + "}";
+
+    [Theory]
+    [InlineData("sem_chave", 401)]
+    [InlineData("entrada_invalida", 422)]
+    [InlineData("rota_inexistente", 404)]
+    [InlineData("erro_inesperado", 500)]
+    public async Task Respostas_de_erro_levam_os_cabecalhos_de_seguranca_e_o_request_id(string chamada, int status)
+    {
+        // O tratador de exceções limpa os headers ao montar o erro: eles precisam ser definidos na hora de enviar.
+        HttpResponseMessage resposta;
+        switch (chamada)
+        {
+            case "sem_chave":
+                resposta = await _fabrica.CreateClient().PostAsJsonAsync(Url, new { documento = CpfValido });
+                break;
+            case "entrada_invalida":
+                resposta = await ClienteAutenticado().PostAsJsonAsync(Url, new { documento = "529.982.247-24" });
+                break;
+            case "rota_inexistente":
+                resposta = await ClienteAutenticado().GetAsync(new Uri("/nao-existe", UriKind.Relative));
+                break;
+            default:
+                _fabrica.Repositorio.Lancar = new InvalidOperationException("falha");
+                resposta = await ClienteAutenticado().PostAsJsonAsync(Url, new { documento = CpfValido });
+                break;
+        }
+
+        Assert.Equal(status, (int)resposta.StatusCode);
+        Assert.Equal("nosniff", resposta.Headers.GetValues("X-Content-Type-Options").Single());
+        Assert.Equal("DENY", resposta.Headers.GetValues("X-Frame-Options").Single());
+        Assert.Equal("no-store", resposta.Headers.CacheControl?.ToString());
+        var corpo = await Json(resposta);
+        Assert.Equal(corpo.GetProperty("request_id").GetString(), resposta.Headers.GetValues("X-Request-ID").Single());
+    }
+
+    [Fact]
+    public async Task Json_ate_64_niveis_passa_e_acima_responde_400()
+    {
+        // Mesmo limite do Motor Python. Chaves dentro de textos não contam.
+        Assert.Equal(HttpStatusCode.OK, (await EnviarJsonAsync(Aninhado(64))).StatusCode);
+        var textoComChaves = $"{{\"documento\": \"{CpfValido}\", \"nome\": \"{new string('[', 100)}\"}}";
+        Assert.Equal(HttpStatusCode.OK, (await EnviarJsonAsync(textoComChaves)).StatusCode);
+        await ContratoDeErro.AfirmarProblema(await EnviarJsonAsync(Aninhado(65)), HttpStatusCode.BadRequest, "requisicao_invalida");
+    }
+
+    [Theory]
+    [InlineData("NaN")]
+    [InlineData("Infinity")]
+    [InlineData("-Infinity")]
+    public async Task Nan_e_infinity_respondem_400_como_json_malformado(string valor)
+    {
+        // Não existem em JSON (RFC 8259): erro de leitura, como no Motor Python.
+        var corpo = $"{{\"documento\": \"{CpfValido}\", \"nome\": {valor}}}";
+        await ContratoDeErro.AfirmarProblema(await EnviarJsonAsync(corpo), HttpStatusCode.BadRequest, "requisicao_invalida");
+    }
+
+    [Fact]
+    public async Task Utf8_invalido_responde_400()
+    {
+        // 0xFF nunca aparece em UTF-8 válido: corpo ilegível, como no Motor Python.
+        using var conteudo = new ByteArrayContent([.. "{\"documento\": \"52998224725\", \"nome\": \"Jos"u8, 0xFF, .. "\"}"u8]);
+        conteudo.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+        var resposta = await ClienteAutenticado().PostAsync(new Uri(Url, UriKind.Relative), conteudo);
+
+        await ContratoDeErro.AfirmarProblema(resposta, HttpStatusCode.BadRequest, "requisicao_invalida");
+    }
+
+    [Fact]
+    public async Task Json_fundo_sem_chave_responde_401()
+    {
+        using var conteudo = new StringContent(Aninhado(65), Encoding.UTF8, "application/json");
+        var resposta = await _fabrica.CreateClient().PostAsync(new Uri(Url, UriKind.Relative), conteudo);
+        await ContratoDeErro.AfirmarProblema(resposta, HttpStatusCode.Unauthorized, "http_401");
+    }
+
+    [Theory]
+    [InlineData("{\"documento\": 52998224725}")]
+    [InlineData("{\"documento\": [\"529.982.247-25\"]}")]
+    [InlineData("{\"documento\": \"529.982.247-25\", \"nome\": {\"a\": 1}}")]
+    [InlineData("[{\"documento\": \"529.982.247-25\"}]")]
+    [InlineData("\"529.982.247-25\"")]
+    [InlineData("null")]
+    [InlineData("")]
+    public async Task Json_valido_com_forma_errada_responde_422(string corpo)
+    {
+        // Igual ao Motor Python: só o corpo ilegível é 400; JSON válido com forma errada é 422.
+        await ContratoDeErro.AfirmarProblema(await EnviarJsonAsync(corpo), HttpStatusCode.UnprocessableEntity, "entrada_invalida");
+    }
 }

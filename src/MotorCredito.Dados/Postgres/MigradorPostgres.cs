@@ -3,13 +3,13 @@ using Npgsql;
 namespace MotorCredito.Dados.BancoPostgres;
 
 /// <summary>
-/// Cria o usuário motor_app_net e executa o script do schema credito_net. Roda como administrador.
+/// Cria o usuário motor_app_net e executa os scripts do schema credito_net, em ordem. Roda como administrador.
 /// Pode ser executado de novo: o que já existe é mantido e a senha é sincronizada com o .env.
 /// </summary>
 public static class MigradorPostgres
 {
     public static async Task<IReadOnlyList<string>> MigrarAsync(
-        string conexaoAdmin, string senhaDoApp, string caminhoDoScript, CancellationToken cancellationToken)
+        string conexaoAdmin, string senhaDoApp, IReadOnlyList<string> caminhosDosScripts, CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(senhaDoApp) || senhaDoApp.Contains('\\', StringComparison.Ordinal))
         {
@@ -43,15 +43,19 @@ public static class MigradorPostgres
             ? $"usuário {Esquemas.UsuarioAppPostgres} já existia: senha sincronizada com o .env"
             : $"usuário {Esquemas.UsuarioAppPostgres} criado");
 
-        var script = await File.ReadAllTextAsync(caminhoDoScript, cancellationToken).ConfigureAwait(false);
-#pragma warning disable CA2100 // script versionado no repositório
-        await using (var comando = new NpgsqlCommand(script, con))
-#pragma warning restore CA2100
+        foreach (var caminho in caminhosDosScripts)
         {
-            await comando.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            var script = await File.ReadAllTextAsync(caminho, cancellationToken).ConfigureAwait(false);
+#pragma warning disable CA2100 // script versionado no repositório
+            await using (var comando = new NpgsqlCommand(script, con))
+#pragma warning restore CA2100
+            {
+                await comando.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            passos.Add($"{Path.GetFileName(caminho)} executado");
         }
 
-        passos.Add($"{Path.GetFileName(caminhoDoScript)} executado");
         return passos;
     }
 }

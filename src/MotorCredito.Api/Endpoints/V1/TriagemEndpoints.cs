@@ -34,7 +34,7 @@ public static class TriagemEndpoints
     }
 
     private static async Task<Ok<SaidaTriagem>> TriarAsync(
-        EntradaTriagem entrada,
+        EntradaTriagem? entrada,
         IValidator<EntradaTriagem> validador,
         IRepositorioListas repositorio,
         CacheDeOrigem cache,
@@ -42,6 +42,12 @@ public static class TriagemEndpoints
         TimeProvider relogio,
         CancellationToken cancellationToken)
     {
+        // Corpo vazio ou "null": 422, como no Motor Python (sem o "?" o ASP.NET respondia 400 antes de chegar aqui).
+        if (entrada is null)
+        {
+            throw new EntradaInvalidaException("Dados de entrada inválidos.");
+        }
+
         // Remove espaços nas extremidades antes de validar; nome vazio conta como não informado.
         var normalizada = new EntradaTriagem(
             entrada.Documento?.Trim(),

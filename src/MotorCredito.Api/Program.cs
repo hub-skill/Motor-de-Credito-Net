@@ -54,12 +54,26 @@ builder.Services.AddSingleton(bancos);
 if (bancos.UsaOracle)
 {
     builder.Services.AddSingleton<IRepositorioListas>(_ => new RepositorioOracle(bancos.Oracle));
+    builder.Services.AddSingleton<IRepositorioDeErros>(_ => new LogDeErrosOracle(bancos.Oracle));
+    builder.Services.AddSingleton<IRepositorioDeMovimentacao>(_ => new MovimentacaoOracle(bancos.Oracle));
 }
 else
 {
     builder.Services.AddSingleton(_ => ConexoesPostgres.CriarFonteDeLeitura(bancos.Postgres));
     builder.Services.AddSingleton<IRepositorioListas, RepositorioPostgres>();
+    builder.Services.AddSingleton<IRepositorioDeErros, LogDeErrosPostgres>();
+    builder.Services.AddSingleton<IRepositorioDeMovimentacao, MovimentacaoPostgres>();
 }
+
+// Log de erros (tabela log_erros): toda resposta 4xx/5xx entra numa fila e é gravada em lotes, em segundo plano.
+builder.Services.AddSingleton<FilaDeErros>();
+builder.Services.AddHostedService<GravadorDeErros>();
+
+// Movimentação (tabela movimentacao): a chegada é numerada e gravada na hora (com prazo curto); a resposta completa
+// a linha em segundo plano, pela mesma estratégia de fila e lotes.
+builder.Services.AddSingleton(new MovimentacaoOpcoes(TimeSpan.FromSeconds(1), TamanhoMaximoDoCorpo));
+builder.Services.AddSingleton<FilaDeRespostas>();
+builder.Services.AddHostedService<GravadorDeRespostas>();
 
 // Serviços e validação
 builder.Services.AddSingleton(TimeProvider.System);
@@ -133,6 +147,7 @@ builder.Services.AddOpenTelemetry()
 
 var app = builder.Build();
 
+app.UseMiddleware<MovimentacaoMiddleware>(); // primeiro: numera a chegada e grava a resposta final de tudo
 app.UseExceptionHandler();
 app.UseStatusCodePages(contexto => RespostaDeErro.EscreverGenericoAsync(contexto.HttpContext));
 app.UseHostFiltering();
@@ -152,6 +167,7 @@ app.UseCors();
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseMiddleware<ProfundidadeDoJsonMiddleware>(); // JSON com mais de 64 níveis = 400, como no Motor Python
 
 // Documentação apenas quando habilitada (desligada em produção por padrão).
 if (settings.EnableDocs)

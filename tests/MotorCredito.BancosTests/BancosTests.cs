@@ -5,12 +5,13 @@ using MotorCredito.Dados;
 using MotorCredito.Dados.BancoOracle;
 using MotorCredito.Dados.BancoPostgres;
 using Npgsql;
+using Oracle.ManagedDataAccess.Client;
 using Xunit;
 
 namespace MotorCredito.BancosTests;
 
 /// <summary>
-/// Testes contra os bancos reais (schemas .NET já carregados). Só leitura, exceto tabelas temporárias.
+/// Testes contra os bancos reais (schemas .NET já carregados). Só leitura, exceto tabelas temporárias e o log de erros (só insert).
 /// Rode com: dotnet test --filter Categoria=Bancos
 /// </summary>
 [Trait("Categoria", "Bancos")]

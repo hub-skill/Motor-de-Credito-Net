@@ -15,6 +15,7 @@ namespace MotorCredito.BancosTests;
 /// Precisa dos CSVs da carga do Python (variável MOTOR_CSV_CGU ou a pasta padrão do projeto Python).
 /// </summary>
 [Trait("Categoria", "Bancos")]
+[Collection(ColecaoDoBanco.Nome)]
 public sealed class CargaDePontaAPontaTests
 {
     private const string PastaPadrao = @"C:\Felipe\Programacao\Python\APIs\Motor de credito\dados_cgu";
@@ -36,8 +37,11 @@ public sealed class CargaDePontaAPontaTests
         return cargas;
     }
 
-    private static string Scripts(string banco) =>
-        Path.Combine(ArquivoEnv.RaizDoRepositorio(), "banco", banco, "01_schema_net.sql");
+    // Mesma ordem da ferramenta (Comandos.ScriptsDeMigracao): listas, movimentação e log de erros.
+    private static readonly string[] NomesDosScripts = ["01_schema_net.sql", "02_movimentacao.sql", "03_log_erros.sql"];
+
+    private static string[] Scripts(string banco) =>
+        [.. NomesDosScripts.Select(arquivo => Path.Combine(ArquivoEnv.RaizDoRepositorio(), "banco", banco, arquivo))];
 
     [Fact]
     public async Task Postgres_migra_carrega_e_fica_identico_ao_python()

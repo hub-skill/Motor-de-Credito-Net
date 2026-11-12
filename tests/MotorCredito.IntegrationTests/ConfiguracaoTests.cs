@@ -29,14 +29,19 @@ public sealed class ApiFactoryConfiguravel(IReadOnlyDictionary<string, string> c
             builder.UseSetting(chave, valor);
         }
 
-        if (repositorioFalso)
+        builder.ConfigureTestServices(servicos =>
         {
-            builder.ConfigureTestServices(servicos =>
+            // O log de erros nunca vai para um banco real nos testes.
+            servicos.RemoveAll<IRepositorioDeErros>();
+            servicos.AddSingleton<IRepositorioDeErros>(new DestinoDeErrosFalso());
+            servicos.RemoveAll<IRepositorioDeMovimentacao>();
+            servicos.AddSingleton<IRepositorioDeMovimentacao>(new MovimentacaoFalsa());
+            if (repositorioFalso)
             {
                 servicos.RemoveAll<IRepositorioListas>();
                 servicos.AddSingleton<IRepositorioListas>(new RepositorioFalso());
-            });
-        }
+            }
+        });
     }
 }
 
