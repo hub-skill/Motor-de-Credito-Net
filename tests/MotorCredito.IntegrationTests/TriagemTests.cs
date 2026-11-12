@@ -223,4 +223,68 @@ public sealed class TriagemTests : IClassFixture<ApiFactory>
         await ContratoDeErro.AfirmarProblema(resposta, HttpStatusCode.MethodNotAllowed, "http_405");
         Assert.Contains("POST", resposta.Content.Headers.Allow);
     }
+
+    private async Task<HttpResponseMessage> EnviarJsonAsync(string corpo)
+    {
+        using var conteudo = new StringContent(corpo, Encoding.UTF8, "application/json");
+        return await ClienteAutenticado().PostAsync(new Uri(Url, UriKind.Relative), conteudo);
+    }
+
+    /// <summary>Corpo válido com um campo extra aninhado até <paramref name="niveis"/> no total (a raiz conta como 1).</summary>
+    private static string Aninhado(int niveis) =>
+        $"{{\"documento\": \"{CpfValido}\", \"extra\": " + new string('[', niveis - 1) + new string(']', niveis - 1) + "}";
+
+    [Fact]
+    public async Task Json_ate_64_niveis_passa_e_acima_responde_400()
+    {
+        // Mesmo limite do Motor Python. Chaves dentro de textos não contam.
+        Assert.Equal(HttpStatusCode.OK, (await EnviarJsonAsync(Aninhado(64))).StatusCode);
+        var textoComChaves = $"{{\"documento\": \"{CpfValido}\", \"nome\": \"{new string('[', 100)}\"}}";
+        Assert.Equal(HttpStatusCode.OK, (await EnviarJsonAsync(textoComChaves)).StatusCode);
+        await ContratoDeErro.AfirmarProblema(await EnviarJsonAsync(Aninhado(65)), HttpStatusCode.BadRequest, "requisicao_invalida");
+    }
+
+    [Theory]
+    [InlineData("NaN")]
+    [InlineData("Infinity")]
+    [InlineData("-Infinity")]
+    public async Task Nan_e_infinity_respondem_400_como_json_malformado(string valor)
+    {
+        // Não existem em JSON (RFC 8259): erro de leitura, como no Motor Python.
+        var corpo = $"{{\"documento\": \"{CpfValido}\", \"nome\": {valor}}}";
+        await ContratoDeErro.AfirmarProblema(await EnviarJsonAsync(corpo), HttpStatusCode.BadRequest, "requisicao_invalida");
+    }
+
+    [Fact]
+    public async Task Utf8_invalido_responde_400()
+    {
+        // 0xFF nunca aparece em UTF-8 válido: corpo ilegível, como no Motor Python.
+        using var conteudo = new ByteArrayContent([.. "{\"documento\": \"52998224725\", \"nome\": \"Jos"u8, 0xFF, .. "\"}"u8]);
+        conteudo.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+        var resposta = await ClienteAutenticado().PostAsync(new Uri(Url, UriKind.Relative), conteudo);
+
+        await ContratoDeErro.AfirmarProblema(resposta, HttpStatusCode.BadRequest, "requisicao_invalida");
+    }
+
+    [Fact]
+    public async Task Json_fundo_sem_chave_responde_401()
+    {
+        using var conteudo = new StringContent(Aninhado(65), Encoding.UTF8, "application/json");
+        var resposta = await _fabrica.CreateClient().PostAsync(new Uri(Url, UriKind.Relative), conteudo);
+        await ContratoDeErro.AfirmarProblema(resposta, HttpStatusCode.Unauthorized, "http_401");
+    }
+
+    [Theory]
+    [InlineData("{\"documento\": 52998224725}")]
+    [InlineData("{\"documento\": [\"529.982.247-25\"]}")]
+    [InlineData("{\"documento\": \"529.982.247-25\", \"nome\": {\"a\": 1}}")]
+    [InlineData("[{\"documento\": \"529.982.247-25\"}]")]
+    [InlineData("\"529.982.247-25\"")]
+    [InlineData("null")]
+    [InlineData("")]
+    public async Task Json_valido_com_forma_errada_responde_422(string corpo)
+    {
+        // Igual ao Motor Python: só o corpo ilegível é 400; JSON válido com forma errada é 422.
+        await ContratoDeErro.AfirmarProblema(await EnviarJsonAsync(corpo), HttpStatusCode.UnprocessableEntity, "entrada_invalida");
+    }
 }

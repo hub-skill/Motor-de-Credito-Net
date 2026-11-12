@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Diagnostics;
 using MotorCredito.Core.Listas;
 
@@ -22,6 +23,10 @@ public sealed partial class ErroDeDominioHandler(ILogger<ErroDeDominioHandler> l
             BancoExpirouException erro => (StatusCodes.Status504GatewayTimeout, "banco_timeout", erro.Message),
             ErroDeBancoException => (StatusCodes.Status503ServiceUnavailable, "banco_indisponivel",
                 "Banco de dados indisponível. Tente novamente."),
+            // JSON válido com forma errada (tipo errado, lista ou texto no lugar do objeto): 422, como no Motor Python.
+            // Só o corpo ilegível (sintaxe, JsonReaderException) fica 400.
+            BadHttpRequestException { InnerException: JsonException json } when !CorpoIlegivel(json) =>
+                (StatusCodes.Status422UnprocessableEntity, "entrada_invalida", "Dados de entrada inválidos."),
             BadHttpRequestException erro => (erro.StatusCode, "requisicao_invalida", "Requisição inválida."),
             _ => (StatusCodes.Status500InternalServerError, "erro_interno",
                   "Erro interno. Informe o request_id ao suporte.")
@@ -43,4 +48,9 @@ public sealed partial class ErroDeDominioHandler(ILogger<ErroDeDominioHandler> l
         await RespostaDeErro.EscreverAsync(httpContext, status, codigo, mensagem, cancellationToken, tipoExcecao);
         return true;
     }
+
+    // O JsonReaderException do System.Text.Json é interno: identificado pelo nome. Os testes (JSON malformado = 400,
+    // tipo errado = 422) pegam se uma versão nova do .NET mudar isso.
+    private static bool CorpoIlegivel(JsonException erro) =>
+        erro.InnerException?.GetType().Name == "JsonReaderException";
 }

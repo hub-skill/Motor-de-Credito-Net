@@ -266,12 +266,12 @@ decidir o que fazer) e `request_id`. Decida sempre pelo `code` (ou pelo `status`
 
 | HTTP | `code` | Quando | O cliente deve |
 |---|---|---|---|
-| 400 | `requisicao_invalida` | JSON malformado | Corrigir o corpo |
+| 400 | `requisicao_invalida` | JSON malformado (inclusive `NaN`/`Infinity`, que não existem em JSON) ou aninhado em mais de 64 níveis | Corrigir o corpo |
 | 401 | `http_401` | Sem `X-API-Key` ou chave errada | Conferir a chave |
 | 404 | `http_404` | Rota inexistente (com chave válida) | Conferir a URL |
 | 405 | `http_405` | Método não permitido (a triagem é só `POST`) | Usar `POST` |
 | 413 | `corpo_muito_grande` | Corpo acima de 4 KB | Enviar só `documento` e `nome` |
-| 422 | `entrada_invalida` | Documento inválido ou nome com caracteres de controle | Corrigir a entrada; **não repetir** |
+| 422 | `entrada_invalida` | Documento inválido ou nome com caracteres de controle; JSON válido com tipo errado (ex.: número no lugar de texto), corpo vazio ou que não é um objeto | Corrigir a entrada; **não repetir** |
 | 429 | `limite_excedido` | Limite de requisições atingido | Esperar `Retry-After` segundos |
 | 500 | `erro_interno` | Erro inesperado | Informar o `request_id` ao suporte |
 | 503 | `banco_indisponivel` | Banco fora do ar | Tentar de novo depois (com espera crescente) |

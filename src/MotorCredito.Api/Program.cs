@@ -164,6 +164,7 @@ app.UseCors();
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseMiddleware<ProfundidadeDoJsonMiddleware>(); // JSON com mais de 64 níveis = 400, como no Motor Python
 
 // Documentação apenas quando habilitada (desligada em produção por padrão).
 if (settings.EnableDocs)
