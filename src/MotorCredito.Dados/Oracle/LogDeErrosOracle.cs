@@ -7,8 +7,9 @@ namespace MotorCredito.Dados.BancoOracle;
 public sealed class LogDeErrosOracle(OracleSettings settings) : IRepositorioDeErros
 {
     private const string SqlInsert =
-        "insert into log_erros (request_id, metodo, rota, status, codigo, titulo, tipo_excecao, duracao_ms, ambiente)"
-        + " values (:request_id, :metodo, :rota, :status, :codigo, :titulo, :tipo_excecao, :duracao_ms, :ambiente)";
+        "insert into log_erros (ano, requisicao, request_id, metodo, rota, status, codigo, titulo, tipo_excecao,"
+        + " duracao_ms, ambiente) values (:ano, :requisicao, :request_id, :metodo, :rota, :status, :codigo, :titulo,"
+        + " :tipo_excecao, :duracao_ms, :ambiente)";
 
     private readonly string _conexao = ConexoesOracle.Montar(settings, settings.Usuario, settings.Senha);
 
@@ -30,6 +31,8 @@ public sealed class LogDeErrosOracle(OracleSettings settings) : IRepositorioDeEr
         comando.CommandText = SqlInsert;
         comando.ArrayBindCount = registros.Count; // um único envio para o lote inteiro
 
+        Adicionar(comando, "ano", OracleDbType.Int32, registros.Select(r => (object)r.Ano));
+        Adicionar(comando, "requisicao", OracleDbType.Int64, registros.Select(r => (object)r.Requisicao));
         Adicionar(comando, "request_id", OracleDbType.Varchar2, registros.Select(r => (object)r.RequestId));
         Adicionar(comando, "metodo", OracleDbType.Varchar2, registros.Select(r => (object)r.Metodo));
         Adicionar(comando, "rota", OracleDbType.Varchar2, registros.Select(r => (object)r.Rota));

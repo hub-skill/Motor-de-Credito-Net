@@ -21,6 +21,7 @@ public sealed class LogDeErrosTests : IClassFixture<ApiFactory>
         _fabrica = fabrica;
         _fabrica.Repositorio.Limpar();
         _fabrica.Erros.Limpar();
+        _fabrica.Movimentacao.Limpar();
     }
 
     private HttpClient ClienteAutenticado()
@@ -54,6 +55,37 @@ public sealed class LogDeErrosTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public async Task Cada_erro_leva_a_chave_da_sua_movimentacao()
+    {
+        var primeira = await ClienteAutenticado().PostAsJsonAsync(Url, new { documento = "529.982.247-24" });
+        var segunda = await ClienteAutenticado().GetAsync(new Uri("/nao-existe", UriKind.Relative));
+
+        foreach (var resposta in new[] { primeira, segunda })
+        {
+            var registro = await _fabrica.Erros.EsperarAsync(await RequestId(resposta));
+            Assert.Equal((MovimentacaoFalsa.Ano, MovimentacaoFalsa.NumeroDoHeader(resposta)), (registro.Ano, registro.Requisicao));
+        }
+    }
+
+    [Fact]
+    public async Task Sem_numero_de_requisicao_o_erro_nao_e_gravado()
+    {
+        // Banco fora na chegada: a API segue (a resposta de erro sai normal), mas a log_erros não recebe linha sem chave.
+        _fabrica.Movimentacao.NumeracaoFalha = true;
+        var semNumero = await ClienteAutenticado().PostAsJsonAsync(Url, new { documento = "529.982.247-24" });
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, semNumero.StatusCode);
+        Assert.False(semNumero.Headers.Contains("X-Requisicao"));
+
+        // Um erro de marcação, já com número: quando ele chega, o anterior já teria chegado também.
+        _fabrica.Movimentacao.NumeracaoFalha = false;
+        var marca = await ClienteAutenticado().GetAsync(new Uri("/nao-existe", UriKind.Relative));
+        await _fabrica.Erros.EsperarAsync(await RequestId(marca));
+
+        Assert.DoesNotContain(_fabrica.Erros.Registros, r => r.RequestId == semNumero.Headers.GetValues("X-Request-ID").Single());
+        Assert.Equal([404], _fabrica.Erros.Registros.Select(r => r.Status));
+    }
+
+    [Fact]
     public async Task Sucesso_e_health_nao_registram()
     {
         var cliente = ClienteAutenticado();
@@ -82,7 +114,6 @@ public sealed class LogDeErrosTests : IClassFixture<ApiFactory>
 
         var esperados = new (HttpResponseMessage Resposta, int Status, string Codigo, string Rota)[]
         {
-            (semChave, 401, "http_401", Url),
             (rotaInexistente, 404, "http_404", "/nao-existe"),
             (metodoErrado, 405, "http_405", Url),
             (jsonInvalido, 400, "requisicao_invalida", Url),
@@ -93,6 +124,10 @@ public sealed class LogDeErrosTests : IClassFixture<ApiFactory>
             var registro = await _fabrica.Erros.EsperarAsync(await RequestId(resposta));
             Assert.Equal((status, codigo, rota), (registro.Status, registro.Codigo, registro.Rota));
         }
+
+        // O 401 sem chave não entra (sem chave válida não há movimentação, e a log_erros exige a chave dela).
+        Assert.DoesNotContain(_fabrica.Erros.Registros, r => r.Status == 401);
+        Assert.False(semChave.Headers.Contains("X-Requisicao"));
     }
 
     [Fact]
@@ -134,7 +169,7 @@ public sealed class LogDeErrosTests : IClassFixture<ApiFactory>
 public sealed class GravadorDeErrosTests
 {
     private static RegistroDeErro Registro(int n) =>
-        new($"req-{n}", "POST", "/api/v1/triagem", 422, "entrada_invalida", "Dados inválidos.", null, 3, "Production");
+        new(2026, n, $"req-{n}", "POST", "/api/v1/triagem", 422, "entrada_invalida", "Dados inválidos.", null, 3, "Production");
 
     private static async Task EsperarAsync(Func<bool> condicao)
     {

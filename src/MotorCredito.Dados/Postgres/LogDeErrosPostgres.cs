@@ -8,8 +8,8 @@ public sealed class LogDeErrosPostgres(NpgsqlDataSource fonte) : IRepositorioDeE
 {
     private const string SqlInsert =
         "insert into credito_net.log_erros"
-        + " (request_id, metodo, rota, status, codigo, titulo, tipo_excecao, duracao_ms, ambiente)"
-        + " values ($1, $2, $3, $4, $5, $6, $7, $8, $9)";
+        + " (ano, requisicao, request_id, metodo, rota, status, codigo, titulo, tipo_excecao, duracao_ms, ambiente)"
+        + " values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)";
 
     public async Task GravarAsync(IReadOnlyList<RegistroDeErro> registros, CancellationToken cancellationToken)
     {
@@ -27,6 +27,8 @@ public sealed class LogDeErrosPostgres(NpgsqlDataSource fonte) : IRepositorioDeE
         foreach (var r in registros)
         {
             var comando = new NpgsqlBatchCommand(SqlInsert);
+            comando.Parameters.Add(new NpgsqlParameter { Value = (short)r.Ano });
+            comando.Parameters.Add(new NpgsqlParameter { Value = r.Requisicao });
             comando.Parameters.Add(new NpgsqlParameter { Value = r.RequestId });
             comando.Parameters.Add(new NpgsqlParameter { Value = r.Metodo });
             comando.Parameters.Add(new NpgsqlParameter { Value = r.Rota });

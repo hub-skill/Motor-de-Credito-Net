@@ -3,7 +3,7 @@ using Oracle.ManagedDataAccess.Client;
 namespace MotorCredito.Dados.BancoOracle;
 
 /// <summary>
-/// Cria MOTOR_CREDITO_NET (dono das tabelas, sem login), MOTOR_APP_NET (aplicação) e executa o script.
+/// Cria MOTOR_CREDITO_NET (dono das tabelas, sem login), MOTOR_APP_NET (aplicação) e executa os scripts, em ordem.
 /// Roda como administrador no banco plugável. Pode ser executado de novo: "já existe" é ignorado.
 /// </summary>
 public static class MigradorOracle
@@ -11,7 +11,8 @@ public static class MigradorOracle
     // ORA-01920 usuário, ORA-00955 objeto, ORA-01408 índice, ORA-02260/02261 chaves: já existem.
     private static readonly HashSet<int> JaExiste = [1920, 955, 1408, 2260, 2261];
 
-    public static IReadOnlyList<string> Migrar(string conexaoAdmin, string senhaDoApp, string caminhoDoScript)
+    public static IReadOnlyList<string> Migrar(
+        string conexaoAdmin, string senhaDoApp, IReadOnlyList<string> caminhosDosScripts)
     {
         if (string.IsNullOrEmpty(senhaDoApp) || senhaDoApp.Contains('"', StringComparison.Ordinal))
         {
@@ -39,22 +40,75 @@ public static class MigradorOracle
             ? $"usuário {Esquemas.UsuarioAppOracle} criado"
             : $"usuário {Esquemas.UsuarioAppOracle} já existia: senha sincronizada com o .env");
 
-        var executados = 0;
-        var existentes = 0;
-        foreach (var comando in Separar(File.ReadAllLines(caminhoDoScript)))
+        foreach (var caminho in caminhosDosScripts)
         {
-            if (Executar(con, comando))
+            var executados = 0;
+            var existentes = 0;
+            foreach (var comando in Separar(File.ReadAllLines(caminho)))
             {
-                executados++;
+                if (Executar(con, comando))
+                {
+                    executados++;
+                }
+                else
+                {
+                    existentes++;
+                }
             }
-            else
+
+            passos.Add($"{Path.GetFileName(caminho)}: {executados} comandos executados, {existentes} já existiam");
+        }
+
+        ConferirProcedures(con, passos);
+        return passos;
+    }
+
+    /// <summary>
+    /// CREATE PROCEDURE com erro de compilação não lança exceção (o objeto fica INVALID): confere o status e, se
+    /// houver erro, interrompe a migração mostrando o que o Oracle reclamou.
+    /// </summary>
+    private static void ConferirProcedures(OracleConnection con, List<string> passos)
+    {
+        using var consulta = con.CreateCommand();
+        consulta.BindByName = true;
+        consulta.CommandText =
+            "select object_name, status from all_objects where owner = :dono and object_type = 'PROCEDURE' order by 1";
+        consulta.Parameters.Add("dono", Esquemas.OracleNet);
+        var invalidas = new List<string>();
+        using (var leitor = consulta.ExecuteReader())
+        {
+            while (leitor.Read())
             {
-                existentes++;
+                var nome = leitor.GetString(0);
+                var status = leitor.GetString(1);
+                passos.Add($"procedure {nome}: {status}");
+                if (status != "VALID")
+                {
+                    invalidas.Add(nome);
+                }
             }
         }
 
-        passos.Add($"{Path.GetFileName(caminhoDoScript)}: {executados} comandos executados, {existentes} já existiam");
-        return passos;
+        if (invalidas.Count == 0)
+        {
+            return;
+        }
+
+        using var erros = con.CreateCommand();
+        erros.BindByName = true;
+        erros.CommandText = "select name, line, text from all_errors where owner = :dono order by name, sequence";
+        erros.Parameters.Add("dono", Esquemas.OracleNet);
+        var detalhes = new List<string>();
+        using (var leitor = erros.ExecuteReader())
+        {
+            while (leitor.Read())
+            {
+                detalhes.Add($"{leitor.GetString(0)} linha {leitor.GetInt32(1)}: {leitor.GetString(2).Trim()}");
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Procedure(s) inválida(s) no Oracle: {string.Join(", ", invalidas)}. {string.Join(" | ", detalhes)}");
     }
 
     /// <summary>Separa o script nas linhas que contêm só "/" (formato SQL*Plus) e descarta comentários.</summary>

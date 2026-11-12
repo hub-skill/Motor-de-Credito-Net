@@ -3,8 +3,10 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using MotorCredito.Api.Middleware;
 using MotorCredito.Core.Configuracao;
 using MotorCredito.Core.Listas;
+using Xunit;
 
 namespace MotorCredito.IntegrationTests;
 
@@ -17,6 +19,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
     /// <summary>Recebe o que a API grava no log de erros (no lugar da tabela log_erros).</summary>
     public DestinoDeErrosFalso Erros { get; } = new();
+
+    /// <summary>Recebe a chegada e a resposta de cada requisição (no lugar da tabela movimentacao).</summary>
+    public MovimentacaoFalsa Movimentacao { get; } = new();
 
     public RelogioFixo Relogio { get; } = new(new DateTimeOffset(2026, 11, 10, 12, 0, 0, TimeSpan.Zero));
 
@@ -40,6 +45,10 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             servicos.AddSingleton<IRepositorioListas>(Repositorio);
             servicos.RemoveAll<IRepositorioDeErros>();
             servicos.AddSingleton<IRepositorioDeErros>(Erros);
+            servicos.RemoveAll<IRepositorioDeMovimentacao>();
+            servicos.AddSingleton<IRepositorioDeMovimentacao>(Movimentacao);
+            servicos.RemoveAll<MovimentacaoOpcoes>();
+            servicos.AddSingleton(new MovimentacaoOpcoes(Movimentacao.PrazoParaNumerar, 4 * 1024));
             servicos.RemoveAll<TimeProvider>();
             servicos.AddSingleton<TimeProvider>(Relogio);
         });
@@ -160,5 +169,92 @@ public sealed class DestinoDeErrosFalso : IRepositorioDeErros
 
             await Task.Delay(10, prazo.Token);
         }
+    }
+}
+
+/// <summary>
+/// Movimentação falsa: numera na memória (ano 2026) e guarda a chegada e a resposta de cada requisição. A
+/// numeração nunca recomeça dentro da fábrica: respostas que chegam atrasadas de um teste anterior não colidem
+/// com as do seguinte (cada teste acha a sua pelo header X-Requisicao).
+/// </summary>
+public sealed class MovimentacaoFalsa : IRepositorioDeMovimentacao
+{
+    public const int Ano = 2026;
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, Chegada> _chegadas = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, RegistroDeResposta> _respostas = new();
+    private long _ultimo;
+
+    public sealed record Chegada(string Metodo, string Rota, string? Conteudo);
+
+    /// <summary>Simula o banco fora na chegada: a numeração falha.</summary>
+    public bool NumeracaoFalha { get; set; }
+
+    /// <summary>Simula o banco lento na chegada.</summary>
+    public TimeSpan NumeracaoAtraso { get; set; }
+
+    /// <summary>Prazo que a API espera pelo número (curto, para o teste do banco lento não demorar).</summary>
+    public TimeSpan PrazoParaNumerar { get; } = TimeSpan.FromMilliseconds(300);
+
+    public int TotalDeChegadas => _chegadas.Count;
+
+    public void Limpar()
+    {
+        NumeracaoFalha = false;
+        NumeracaoAtraso = TimeSpan.Zero;
+    }
+
+    public async Task<(int Ano, long Requisicao)> RegistrarRequisicaoAsync(
+        string metodo, string rota, string? conteudo, CancellationToken cancellationToken)
+    {
+        if (NumeracaoFalha)
+        {
+            throw new InvalidOperationException("banco fora");
+        }
+
+        if (NumeracaoAtraso > TimeSpan.Zero)
+        {
+            await Task.Delay(NumeracaoAtraso, cancellationToken);
+        }
+
+        var numero = Interlocked.Increment(ref _ultimo);
+        _chegadas[numero] = new Chegada(metodo, rota, conteudo);
+        return (Ano, numero);
+    }
+
+    public Task RegistrarRespostasAsync(IReadOnlyList<RegistroDeResposta> respostas, CancellationToken cancellationToken)
+    {
+        foreach (var r in respostas)
+        {
+            _respostas[r.Requisicao] = r;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Chegada? ChegadaDe(long requisicao) => _chegadas.GetValueOrDefault(requisicao);
+
+    /// <summary>Espera (até 5 s) a resposta gravada desta requisição: a gravação é assíncrona.</summary>
+    public async Task<RegistroDeResposta> EsperarRespostaAsync(long requisicao)
+    {
+        using var prazo = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (true)
+        {
+            if (_respostas.TryGetValue(requisicao, out var resposta))
+            {
+                return resposta;
+            }
+
+            await Task.Delay(10, prazo.Token);
+        }
+    }
+
+    /// <summary>Número da requisição a partir do header X-Requisicao (ex.: 2026-000123 vira 123).</summary>
+    public static long NumeroDoHeader(HttpResponseMessage resposta)
+    {
+        ArgumentNullException.ThrowIfNull(resposta);
+        var partes = resposta.Headers.GetValues(MovimentacaoMiddleware.Header).Single().Split('-');
+        Assert.Equal(["2026", partes[1]], partes);
+        return long.Parse(partes[1], System.Globalization.CultureInfo.InvariantCulture);
     }
 }

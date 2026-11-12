@@ -221,6 +221,7 @@ Exemplo – pessoa exposta politicamente:
 | Header | Valor |
 |---|---|
 | `X-Request-ID` | Identificador da requisição. **Informe ao suporte** em caso de erro |
+| `X-Requisicao` | Número da requisição na movimentação (ex.: `2026-000123`). **Informe ao suporte** também. Ausente se a chave de API falta ou é inválida, se a rota é `/health` ou `/metrics`, ou se o banco não deu o número a tempo (ver seção 6) |
 | `Cache-Control` | `no-store` (a resposta contém dados pessoais) |
 | `X-Content-Type-Options` / `X-Frame-Options` / `Strict-Transport-Security` | Proteções do navegador |
 | `Retry-After` | Nas respostas 429: segundos até poder tentar de novo |
@@ -284,6 +285,51 @@ Python: a API não revela quais rotas existem.
 **Repetir ou não?** Repita só 429, 503 e 504, com espera crescente (ex.: 1 s, 2 s, 4 s). Nunca repita 4xx de
 entrada (400, 413, 422): o resultado será o mesmo.
 
+### Movimentação: o que chegou e o que a API respondeu
+
+Cada requisição **com chave de API válida** é registrada na tabela `movimentacao`, menos `/health/*` e `/metrics`
+(as sondas chamam a cada poucos segundos): primeiro o que chegou, depois o que a API respondeu, **na mesma linha**.
+Chamadas sem chave ou com chave errada (inclusive varreduras de rotas) recebem 401 e **não** são registradas, nem na
+movimentação nem na `log_erros`: só aparecem no log da aplicação.
+
+| Banco | Tabelas |
+|---|---|
+| PostgreSQL | `credito_net.movimentacao` e `credito_net.contador_requisicao` |
+| Oracle | `motor_credito_net.movimentacao` e `motor_credito_net.contador_requisicao` |
+
+| Coluna | Conteúdo |
+|---|---|
+| `ano`, `requisicao` | A chave. `requisicao` é um contador que volta a 1 em todo ano novo (o ano é o do horário de Brasília). O cliente recebe o número no header `X-Requisicao` (ex.: `2026-000123`) |
+| `metodo`, `rota` | Método e caminho pedido (sem a query string, até 200 caracteres) |
+| `requisicao_conteudo`, `requisicao_em` | O que foi enviado, em qualquer formato (texto), e o momento em que chegou |
+| `situacao_requisicao` | `OK` = aceita; `ER` = recusada (respostas 4xx: JSON inválido, entrada inválida, limite excedido...). Vazia até a resposta |
+| `status_http`, `resposta_conteudo`, `resposta_em` | Status, corpo e momento da resposta. `resposta_em` vazio = a API não chegou a responder (caiu no meio) ou a gravação da resposta se perdeu |
+| `situacao_resposta` | `OK` = sucesso (2xx); `ER` = erro (4xx ou 5xx). Uma falha do servidor (5xx) fica `OK` na requisição e `ER` na resposta |
+
+- **Numeração e chegada** são gravadas na hora, num único comando do banco: duas requisições ao mesmo tempo nunca
+  recebem o mesmo número. A API espera o banco por até **1 segundo**; sem número nesse prazo (banco fora ou lento), a
+  requisição segue normalmente, **sem movimentação e sem o header `X-Requisicao`** (aviso `requisição sem número na
+  movimentação` no log da aplicação).
+- **A resposta** completa a linha em segundo plano (fila de até 1000, lotes de 100): o cliente não espera por ela.
+  Com o banco fora, a fila enche e as respostas a mais se perdem (aviso no log). Uma resposta já gravada nunca é
+  sobrescrita.
+- **Conteúdo**: texto em qualquer formato (JSON malformado, XML...), até 32 KB (acima disso é cortado, com aviso no
+  fim). Corpo acima do limite da API (4 KB) não é lido: só o tamanho fica gravado. **Todo CPF é mascarado**
+  (`***.982.247-**`), em qualquer formato, na requisição e na resposta. A chave de API vai num header e nunca é gravada.
+  **O nome enviado é gravado como veio.**
+- **Permissão**: o usuário da aplicação (`motor_app_net / MOTOR_APP_NET`) não tem acesso às tabelas; só executa as duas funções/procedures
+  (`registrar_requisicao` e `registrar_resposta`). Consultas e limpeza são feitas por um administrador.
+- **Consultar** uma requisição relatada pelo cliente: `select * from credito_net.movimentacao where ano = 2026 and requisicao = 123`.
+- **Limpeza** (o volume cresce com cada chamada). Exemplo, manter 90 dias, apagando primeiro o log de erros:
+  `delete from credito_net.log_erros where ocorrido_em < now() - interval '90 days'` e depois
+  `delete from credito_net.movimentacao where requisicao_em < now() - interval '90 days'` (PostgreSQL); no Oracle,
+  `... WHERE requisicao_em < SYSTIMESTAMP - INTERVAL '90' DAY` nas tabelas de `motor_credito_net`.
+- **Custo**: gravar a chegada de cada requisição é uma escrita no banco dentro do atendimento. Medido em 12/11/2026
+  (notebook de 2 núcleos, PostgreSQL, gerador de carga no mesmo computador, antes x depois): a vazão máxima caiu de ~760 para ~530 requisições por segundo (de 762,3 para 529,1 com 16 clientes simultâneos, -31%; com 4 clientes, de 618,3 para 350,2, -43%). O Oracle não foi
+  medido. Se a vazão virar problema, as saídas são uma conexão própria só para essas escritas e confirmar a gravação
+  sem esperar o disco (`synchronous_commit = off`, que aceita perder as últimas centenas de milissegundos num
+  desligamento brusco).
+
 ### Log de erros no banco
 
 Toda resposta de erro (4xx e 5xx) é gravada na tabela `log_erros`, no mesmo banco que a API estiver usando:
@@ -293,19 +339,23 @@ Toda resposta de erro (4xx e 5xx) é gravada na tabela `log_erros`, no mesmo ban
 | PostgreSQL | `credito_net.log_erros` |
 | Oracle | `motor_credito_net.log_erros` |
 
-Colunas: `ocorrido_em`, `request_id` (o mesmo devolvido ao cliente), `metodo`, `rota`, `status`, `codigo`, `titulo`,
+Colunas: `ano` e `requisicao` (as duas primeiras: a chave da movimentação do erro, **obrigatórias**), `id`,
+`ocorrido_em`, `request_id` (o mesmo devolvido ao cliente), `metodo`, `rota`, `status`, `codigo`, `titulo`,
 `tipo_excecao` (só no 500), `duracao_ms` e `ambiente` (`ASPNETCORE_ENVIRONMENT`). **Nunca** grava CPF, CNPJ, nome ou o corpo da
-requisição. As tabelas são criadas por `dotnet run --project src/MotorCredito.Carga -- migrar` (fim do `01_schema_net.sql`).
+requisição (o corpo, mascarado, fica na movimentação). As tabelas são criadas por `dotnet run --project src/MotorCredito.Carga -- migrar` (scripts `02_movimentacao.sql` e `03_log_erros.sql`).
 
+- **Sem número de requisição, o erro não é gravado aqui**: se a chamada veio sem chave válida (401) ou o banco
+  estava fora ou lento na chegada (ver movimentação), o erro aparece só no log da aplicação. A tabela nunca tem linha sem `ano` e `requisicao`.
 - A resposta não espera o banco: o erro entra numa fila em memória (até 1000) e é gravado em lotes de até 100.
   Com o banco fora ou lento, a fila enche e os registros a mais são descartados (aviso no log da aplicação);
   a API continua respondendo normalmente. Ao desligar, a API grava o que ainda estiver na fila (até 5 s).
 - O usuário da aplicação (`motor_app_net / MOTOR_APP_NET`) só tem **INSERT** nessa tabela: não lê, não altera e não apaga. Consultas e
   limpeza são feitas por um administrador.
-- Para achar o erro que um cliente relatou: `select * from credito_net.log_erros where request_id = '<request_id>'`.
-- Limpeza (o volume cresce com varreduras e clientes integrando errado). Exemplo, manter 90 dias:
-  `delete from credito_net.log_erros where ocorrido_em < now() - interval '90 days'` (PostgreSQL) ou
-  `DELETE FROM motor_credito_net.log_erros WHERE ocorrido_em < SYSTIMESTAMP - INTERVAL '90' DAY` (Oracle).
+- Para achar o erro que um cliente relatou: `select * from credito_net.log_erros where ano = 2026 and requisicao = 123`
+  (ou pelo `request_id`), e a requisição completa em `credito_net.movimentacao` com a mesma chave.
+- A versão anterior da tabela (sem a chave) ficou guardada como `log_erros_v1`, sem acesso da aplicação: as linhas
+  dela não têm movimentação e não foram copiadas. Apague quando quiser (`drop table credito_net.log_erros_v1`).
+- Limpeza: ver a da movimentação (o log de erros é apagado primeiro).
 
 ---
 
@@ -494,8 +544,8 @@ No .NET, `__` separa seções: `Bancos__Postgres__Host` equivale a `Bancos:Postg
 
 | Banco | Schema | Tabelas | Usuário da aplicação |
 |---|---|---|---|
-| PostgreSQL (`motor_credito`) | `credito_net` | `sancoes`, `peps`, `log_erros` (só INSERT) | `motor_app_net` |
-| Oracle (`XEPDB1`) | `MOTOR_CREDITO_NET` (sem login) | `SANCOES`, `PEPS`, `LOG_ERROS` (só INSERT) | `MOTOR_APP_NET` (sinônimos) |
+| PostgreSQL (`motor_credito`) | `credito_net` | `sancoes`, `peps`, `movimentacao` e `contador_requisicao` (só pelas funções), `log_erros` (só INSERT) | `motor_app_net` |
+| Oracle (`XEPDB1`) | `MOTOR_CREDITO_NET` (sem login) | `SANCOES`, `PEPS`, `MOVIMENTACAO` e `CONTADOR_REQUISICAO` (só pelas procedures), `LOG_ERROS` (só INSERT) | `MOTOR_APP_NET` (sinônimos) |
 
 Consultas manuais (pgAdmin, SQL Developer) usam o schema na frente: `select * from credito_net.peps` /
 `select * from motor_credito_net.peps`. No SQL Developer, conecte por **Nome do Serviço** `XEPDB1`.
@@ -507,8 +557,12 @@ Consultas manuais (pgAdmin, SQL Developer) usam o schema na frente: `select * fr
 - **Documento por POST**, nunca na URL: não aparece em logs de proxy nem em histórico.
 - **CPF sempre mascarado** na resposta. CNPJ é dado público e volta formatado.
 - **Logs sem dados pessoais**: nem documento, nem nome, nem detalhes da conexão com o banco.
-- **Usuários de banco com privilégio mínimo**: a API só lê (no PostgreSQL a sessão abre como somente leitura);
-  o usuário da aplicação não cria tabelas.
+- **Usuários de banco com privilégio mínimo**: a API só lê as listas (no PostgreSQL a sessão abre como somente
+  leitura); o usuário da aplicação não cria tabelas. As únicas escritas são a movimentação (o usuário só executa as
+  duas funções, sem acesso às tabelas) e o log de erros (só `INSERT`).
+- **A movimentação guarda o que foi enviado**: o CPF é gravado mascarado, mas o **nome** vai como veio, junto com o
+  momento da consulta. Defina por quanto tempo guardar (a limpeza está na seção 6), restrinja o acesso às tabelas a
+  quem precisa (auditoria e suporte) e registre a finalidade e o prazo de retenção.
 - **Segredos só no `.env`** ou em variáveis de ambiente; nunca no código ou no repositório.
 - **Finalidade**: use a API para análise de crédito, prevenção a fraude e PLD. Os dados vêm de cadastros
   públicos, mas a combinação CPF + nome é dado pessoal: registre a base legal do tratamento.
@@ -548,5 +602,7 @@ Consultas manuais (pgAdmin, SQL Developer) usam o schema na frente: `select * fr
 | `relation "peps" does not exist` no pgAdmin | Consulta sem o schema | Usar `credito_net.peps` |
 | Build falha com `NU1902`/`NU1903` | Pacote com vulnerabilidade conhecida | Atualizar a versão no `Directory.Packages.props` (nunca desligar o aviso) |
 | Build falha com `MSB4014`/`MSB4236` (workload manifest) | Atualização do .NET SDK em andamento | Esperar o Windows Update terminar e tentar de novo |
+| Resposta sem o header `X-Requisicao` | Chamada sem chave válida, rota `/health` ou `/metrics`, ou banco fora/lento na chegada (passou de 1 s) | Ver o aviso `requisição sem número na movimentação` no log e conferir o banco |
+| `resposta_em` vazio na movimentação | A API caiu antes de responder, ou a gravação da resposta se perdeu | Ver os avisos `fila da movimentação cheia` e `falha ao gravar a resposta na movimentação` |
 
-Ao abrir chamado, informe o **`request_id`** da resposta (ou o header `X-Request-ID`), a data e a hora.
+Ao abrir chamado, informe o **`request_id`** e o **`X-Requisicao`** da resposta (ou o header `X-Request-ID`), a data e a hora.

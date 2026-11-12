@@ -138,34 +138,4 @@ public sealed class BancosTests
 #pragma warning restore CA2100
         await comando.ExecuteNonQueryAsync();
     }
-
-    [Theory]
-    [MemberData(nameof(Bancos))]
-    public async Task Grava_log_de_erros_mas_nao_le(string banco)
-    {
-        // A aplicação só tem INSERT em log_erros: gravar funciona, ler é negado.
-        var settings = BancosSettings.DoAmbiente();
-        RegistroDeErro[] registros =
-        [
-            new("teste-bancos-net-1", "POST", "/api/v1/triagem", 422, "entrada_invalida", "Dados inválidos.", null, 5, "Teste"),
-            new("teste-bancos-net-2", "GET", "/x", 500, "erro_interno", "Erro interno.", "System.InvalidOperationException", null, "Teste"),
-        ];
-
-        if (banco == "oracle")
-        {
-            await new LogDeErrosOracle(settings.Oracle).GravarAsync(registros, CancellationToken.None);
-            using var conexao = new OracleConnection(ConexoesOracle.Montar(settings.Oracle, settings.Oracle.Usuario, settings.Oracle.Senha));
-            await conexao.OpenAsync();
-            using var leitura = new OracleCommand("select count(*) from log_erros", conexao);
-            await Assert.ThrowsAsync<OracleException>(() => leitura.ExecuteScalarAsync());
-        }
-        else
-        {
-            await using var fonte = ConexoesPostgres.CriarFonteDeLeitura(settings.Postgres);
-            await new LogDeErrosPostgres(fonte).GravarAsync(registros, CancellationToken.None);
-            await using var leitura = fonte.CreateCommand("select count(*) from credito_net.log_erros");
-            var erro = await Assert.ThrowsAsync<PostgresException>(() => leitura.ExecuteScalarAsync());
-            Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, erro.SqlState);
-        }
-    }
 }

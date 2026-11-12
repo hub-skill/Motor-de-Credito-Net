@@ -234,6 +234,40 @@ public sealed class TriagemTests : IClassFixture<ApiFactory>
     private static string Aninhado(int niveis) =>
         $"{{\"documento\": \"{CpfValido}\", \"extra\": " + new string('[', niveis - 1) + new string(']', niveis - 1) + "}";
 
+    [Theory]
+    [InlineData("sem_chave", 401)]
+    [InlineData("entrada_invalida", 422)]
+    [InlineData("rota_inexistente", 404)]
+    [InlineData("erro_inesperado", 500)]
+    public async Task Respostas_de_erro_levam_os_cabecalhos_de_seguranca_e_o_request_id(string chamada, int status)
+    {
+        // O tratador de exceções limpa os headers ao montar o erro: eles precisam ser definidos na hora de enviar.
+        HttpResponseMessage resposta;
+        switch (chamada)
+        {
+            case "sem_chave":
+                resposta = await _fabrica.CreateClient().PostAsJsonAsync(Url, new { documento = CpfValido });
+                break;
+            case "entrada_invalida":
+                resposta = await ClienteAutenticado().PostAsJsonAsync(Url, new { documento = "529.982.247-24" });
+                break;
+            case "rota_inexistente":
+                resposta = await ClienteAutenticado().GetAsync(new Uri("/nao-existe", UriKind.Relative));
+                break;
+            default:
+                _fabrica.Repositorio.Lancar = new InvalidOperationException("falha");
+                resposta = await ClienteAutenticado().PostAsJsonAsync(Url, new { documento = CpfValido });
+                break;
+        }
+
+        Assert.Equal(status, (int)resposta.StatusCode);
+        Assert.Equal("nosniff", resposta.Headers.GetValues("X-Content-Type-Options").Single());
+        Assert.Equal("DENY", resposta.Headers.GetValues("X-Frame-Options").Single());
+        Assert.Equal("no-store", resposta.Headers.CacheControl?.ToString());
+        var corpo = await Json(resposta);
+        Assert.Equal(corpo.GetProperty("request_id").GetString(), resposta.Headers.GetValues("X-Request-ID").Single());
+    }
+
     [Fact]
     public async Task Json_ate_64_niveis_passa_e_acima_responde_400()
     {

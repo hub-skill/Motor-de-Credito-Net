@@ -58,7 +58,7 @@ public sealed class ProtecoesTests : IDisposable
     public async Task Migrador_postgres_recusa_senha_invalida_antes_de_conectar(string senha)
     {
         var erro = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            MigradorPostgres.MigrarAsync("Host=127.0.0.1;Port=1", senha, "nao-usado.sql", CancellationToken.None));
+            MigradorPostgres.MigrarAsync("Host=127.0.0.1;Port=1", senha, ["nao-usado.sql"], CancellationToken.None));
         Assert.Contains("Bancos__Postgres__Senha", erro.Message, StringComparison.Ordinal);
     }
 
@@ -68,7 +68,7 @@ public sealed class ProtecoesTests : IDisposable
     public void Migrador_oracle_recusa_senha_invalida_antes_de_conectar(string senha)
     {
         var erro = Assert.Throws<InvalidOperationException>(() =>
-            MigradorOracle.Migrar("Data Source=127.0.0.1:1/XEPDB1", senha, "nao-usado.sql"));
+            MigradorOracle.Migrar("Data Source=127.0.0.1:1/XEPDB1", senha, ["nao-usado.sql"]));
         Assert.Contains("Bancos__Oracle__Senha", erro.Message, StringComparison.Ordinal);
     }
 

@@ -2,9 +2,15 @@ namespace MotorCredito.Core.Listas;
 
 /// <summary>
 /// Uma resposta de erro (4xx ou 5xx) da API, para a tabela log_erros. Só metadados: nunca documento, nome ou
-/// corpo da requisição. Mesmos campos do Motor Python.
+/// corpo da requisição (o corpo, mascarado, fica na movimentação). Mesmos campos do Motor Python.
+/// <para>
+/// <see cref="Ano"/> e <see cref="Requisicao"/> apontam para a movimentação do erro: sem eles o erro não é
+/// gravado (vai só para o log da aplicação).
+/// </para>
 /// </summary>
 public sealed record RegistroDeErro(
+    int Ano,
+    long Requisicao,
     string RequestId,
     string Metodo,
     string Rota,
