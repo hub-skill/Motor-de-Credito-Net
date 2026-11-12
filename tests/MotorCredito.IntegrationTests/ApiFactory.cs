@@ -25,6 +25,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        // Como na produção. O padrão do WebApplicationFactory é Development, que muda o tratamento de erros do
+        // ASP.NET (ex.: JSON inválido) e escondeu um erro real: a API respondia http_400 em vez de requisicao_invalida.
+        builder.UseEnvironment("Production");
         builder.UseSetting("Api:ApiKey", ChaveDeTeste);
         builder.UseSetting("Api:RequestTimeoutSeconds", "1");
         builder.UseSetting("Api:RateLimitPorMinuto", "10000");

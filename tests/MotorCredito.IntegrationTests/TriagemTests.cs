@@ -92,13 +92,13 @@ public sealed class TriagemTests : IClassFixture<ApiFactory>
     public async Task Sem_chave_ou_chave_errada_responde_401()
     {
         var semChave = await _fabrica.CreateClient().PostAsJsonAsync(Url, new { documento = CpfValido });
-        Assert.Equal(HttpStatusCode.Unauthorized, semChave.StatusCode);
+        await ContratoDeErro.AfirmarProblema(semChave, HttpStatusCode.Unauthorized, "http_401");
+        Assert.Equal("APIKey", semChave.Headers.WwwAuthenticate.ToString()); // igual ao Motor Python
 
         var cliente = _fabrica.CreateClient();
         cliente.DefaultRequestHeaders.Add("X-API-Key", "errada");
         var errada = await cliente.PostAsJsonAsync(Url, new { documento = CpfValido });
-        Assert.Equal(HttpStatusCode.Unauthorized, errada.StatusCode);
-        Assert.Equal("http_401", (await Json(errada)).GetProperty("code").GetString());
+        await ContratoDeErro.AfirmarProblema(errada, HttpStatusCode.Unauthorized, "http_401");
     }
 
     [Theory]
@@ -112,10 +112,7 @@ public sealed class TriagemTests : IClassFixture<ApiFactory>
         var resposta = await ClienteAutenticado().PostAsJsonAsync(Url, new { documento, nome });
         var texto = await resposta.Content.ReadAsStringAsync();
 
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, resposta.StatusCode);
-        using var json = JsonDocument.Parse(texto);
-        Assert.Equal("entrada_invalida", json.RootElement.GetProperty("code").GetString());
-        Assert.False(string.IsNullOrEmpty(json.RootElement.GetProperty("request_id").GetString()));
+        await ContratoDeErro.AfirmarProblema(resposta, HttpStatusCode.UnprocessableEntity, "entrada_invalida");
         Assert.DoesNotContain("52998224724", texto, StringComparison.Ordinal);
     }
 
@@ -131,7 +128,7 @@ public sealed class TriagemTests : IClassFixture<ApiFactory>
     {
         using var conteudo = new StringContent("{nao e json", Encoding.UTF8, "application/json");
         var resposta = await ClienteAutenticado().PostAsync(Url, conteudo);
-        Assert.Equal(HttpStatusCode.BadRequest, resposta.StatusCode);
+        await ContratoDeErro.AfirmarProblema(resposta, HttpStatusCode.BadRequest, "requisicao_invalida");
     }
 
     [Fact]
@@ -139,7 +136,7 @@ public sealed class TriagemTests : IClassFixture<ApiFactory>
     {
         using var conteudo = new StringContent($"{{\"documento\": \"{new string('1', 5000)}\"}}", Encoding.UTF8, "application/json");
         var resposta = await ClienteAutenticado().PostAsync(Url, conteudo);
-        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, resposta.StatusCode);
+        await ContratoDeErro.AfirmarProblema(resposta, HttpStatusCode.RequestEntityTooLarge, "corpo_muito_grande");
     }
 
     [Fact]
@@ -147,11 +144,11 @@ public sealed class TriagemTests : IClassFixture<ApiFactory>
     {
         _fabrica.Repositorio.Falhar = true;
         var resposta = await ClienteAutenticado().PostAsJsonAsync(Url, new { documento = CpfValido });
-        Assert.Equal(HttpStatusCode.ServiceUnavailable, resposta.StatusCode);
-        Assert.Equal("banco_indisponivel", (await Json(resposta)).GetProperty("code").GetString());
+        await ContratoDeErro.AfirmarProblema(resposta, HttpStatusCode.ServiceUnavailable, "banco_indisponivel");
 
         var pronto = await _fabrica.CreateClient().GetAsync(new Uri("/health/ready", UriKind.Relative));
         Assert.Equal(HttpStatusCode.ServiceUnavailable, pronto.StatusCode);
+        Assert.Equal("banco_indisponivel", (await Json(pronto)).GetProperty("status").GetString());
     }
 
     [Fact]
@@ -159,8 +156,7 @@ public sealed class TriagemTests : IClassFixture<ApiFactory>
     {
         _fabrica.Repositorio.Atraso = TimeSpan.FromSeconds(3); // RequestTimeoutSeconds = 1 nos testes
         var resposta = await ClienteAutenticado().PostAsJsonAsync(Url, new { documento = CpfValido });
-        Assert.Equal(HttpStatusCode.GatewayTimeout, resposta.StatusCode);
-        Assert.Equal("timeout", (await Json(resposta)).GetProperty("code").GetString());
+        await ContratoDeErro.AfirmarProblema(resposta, HttpStatusCode.GatewayTimeout, "timeout");
     }
 
     [Fact]
@@ -169,8 +165,7 @@ public sealed class TriagemTests : IClassFixture<ApiFactory>
         _fabrica.Repositorio.Lancar = new BancoExpirouException();
         var resposta = await ClienteAutenticado().PostAsJsonAsync(Url, new { documento = CpfValido });
 
-        Assert.Equal(HttpStatusCode.GatewayTimeout, resposta.StatusCode);
-        Assert.Equal("banco_timeout", (await Json(resposta)).GetProperty("code").GetString());
+        await ContratoDeErro.AfirmarProblema(resposta, HttpStatusCode.GatewayTimeout, "banco_timeout");
     }
 
     [Fact]
@@ -180,10 +175,7 @@ public sealed class TriagemTests : IClassFixture<ApiFactory>
         var resposta = await ClienteAutenticado().PostAsJsonAsync(Url, new { documento = CpfValido });
         var texto = await resposta.Content.ReadAsStringAsync();
 
-        Assert.Equal(HttpStatusCode.InternalServerError, resposta.StatusCode);
-        using var json = JsonDocument.Parse(texto);
-        Assert.Equal("erro_interno", json.RootElement.GetProperty("code").GetString());
-        Assert.False(string.IsNullOrEmpty(json.RootElement.GetProperty("request_id").GetString()));
+        await ContratoDeErro.AfirmarProblema(resposta, HttpStatusCode.InternalServerError, "erro_interno");
         Assert.DoesNotContain("detalhe interno", texto, StringComparison.Ordinal);
         Assert.DoesNotContain("InvalidOperationException", texto, StringComparison.Ordinal);
     }
@@ -197,6 +189,11 @@ public sealed class TriagemTests : IClassFixture<ApiFactory>
 
         Assert.Equal(HttpStatusCode.OK, vivo.StatusCode);
         Assert.Equal(HttpStatusCode.OK, pronto.StatusCode);
+        // Mesmo corpo JSON do Motor Python.
+        Assert.Equal("ok", (await Json(vivo)).GetProperty("status").GetString());
+        var corpoPronto = await Json(pronto);
+        Assert.Equal("ok", corpoPronto.GetProperty("status").GetString());
+        Assert.Equal("postgres", corpoPronto.GetProperty("banco").GetString());
         Assert.Equal("nosniff", vivo.Headers.GetValues("X-Content-Type-Options").Single());
         Assert.Equal("DENY", vivo.Headers.GetValues("X-Frame-Options").Single());
     }
@@ -205,7 +202,25 @@ public sealed class TriagemTests : IClassFixture<ApiFactory>
     public async Task Rota_inexistente_responde_404_no_formato_padrao()
     {
         var resposta = await ClienteAutenticado().GetAsync(new Uri("/nao-existe", UriKind.Relative));
-        Assert.Equal(HttpStatusCode.NotFound, resposta.StatusCode);
-        Assert.Equal("http_404", (await Json(resposta)).GetProperty("code").GetString());
+        await ContratoDeErro.AfirmarProblema(resposta, HttpStatusCode.NotFound, "http_404");
+    }
+
+    [Theory]
+    [InlineData("/nao-existe")]
+    [InlineData(Url)]
+    public async Task Sem_chave_rota_inexistente_ou_metodo_errado_responde_401(string rota)
+    {
+        // Igual ao Motor Python: sem chave, a API não revela quais rotas existem.
+        var resposta = await _fabrica.CreateClient().GetAsync(new Uri(rota, UriKind.Relative));
+        await ContratoDeErro.AfirmarProblema(resposta, HttpStatusCode.Unauthorized, "http_401");
+        Assert.Equal("APIKey", resposta.Headers.WwwAuthenticate.ToString());
+    }
+
+    [Fact]
+    public async Task Metodo_errado_responde_405_no_formato_padrao()
+    {
+        var resposta = await ClienteAutenticado().GetAsync(new Uri(Url, UriKind.Relative));
+        await ContratoDeErro.AfirmarProblema(resposta, HttpStatusCode.MethodNotAllowed, "http_405");
+        Assert.Contains("POST", resposta.Content.Headers.Allow);
     }
 }

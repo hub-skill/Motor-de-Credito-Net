@@ -201,8 +201,8 @@ Exemplo – pessoa exposta politicamente:
 
 | Endpoint | Autenticação | Uso |
 |---|---|---|
-| `GET /health/live` | não | A aplicação está no ar (não consulta o banco). Para o orquestrador reiniciar o processo |
-| `GET /health/ready` | não | A aplicação **e o banco** respondem. `503` se o banco estiver fora. Para o balanceador tirar a instância de rotação |
+| `GET /health/live` | não | A aplicação está no ar: `{"status":"ok"}` (não consulta o banco). Para o orquestrador reiniciar o processo |
+| `GET /health/ready` | não | A aplicação **e o banco** respondem: `{"status":"ok","banco":"postgres"}`; `503` com `{"status":"banco_indisponivel"}` se o banco estiver fora. Para o balanceador tirar a instância de rotação |
 | `GET /metrics` | não | Métricas Prometheus (latência, requisições, erros). **Exponha só na rede interna** |
 | `GET /openapi/v1.json` | não | Contrato OpenAPI. Só existe com `Api__EnableDocs=true` |
 | `GET /scalar` | não | Documentação interativa (testar chamadas pelo navegador). Só com `Api__EnableDocs=true` |
@@ -251,7 +251,9 @@ Exemplo – pessoa exposta politicamente:
 
 ## 6. Erros
 
-Formato único (RFC 7807 – ProblemDetails), sempre com `code` e `request_id`:
+Formato único, **o mesmo do Motor Python**: RFC 9457 (Problem Details), com `Content-Type: application/problem+json`
+e exatamente quatro campos: `title` (texto para pessoas), `status` (o mesmo código HTTP), `code` (para o seu programa
+decidir o que fazer) e `request_id`. Decida sempre pelo `code` (ou pelo `status`), nunca pelo texto do `title`:
 
 ```json
 {
@@ -267,15 +269,17 @@ Formato único (RFC 7807 – ProblemDetails), sempre com `code` e `request_id`:
 | 400 | `requisicao_invalida` | JSON malformado | Corrigir o corpo |
 | 401 | `http_401` | Sem `X-API-Key` ou chave errada | Conferir a chave |
 | 404 | `http_404` | Rota inexistente (com chave válida) | Conferir a URL |
+| 405 | `http_405` | Método não permitido (a triagem é só `POST`) | Usar `POST` |
 | 413 | `corpo_muito_grande` | Corpo acima de 4 KB | Enviar só `documento` e `nome` |
 | 422 | `entrada_invalida` | Documento inválido ou nome com caracteres de controle | Corrigir a entrada; **não repetir** |
-| 429 | `http_429` | Limite de requisições atingido | Esperar `Retry-After` segundos |
+| 429 | `limite_excedido` | Limite de requisições atingido | Esperar `Retry-After` segundos |
 | 500 | `erro_interno` | Erro inesperado | Informar o `request_id` ao suporte |
 | 503 | `banco_indisponivel` | Banco fora do ar | Tentar de novo depois (com espera crescente) |
 | 504 | `banco_timeout` / `timeout` | Banco ou processamento lento demais | Tentar de novo depois |
 
 As mensagens de erro **nunca repetem a entrada** (CPF, nome) nem detalhes internos (SQL, tabelas, senhas).
-Sem chave, até rotas inexistentes respondem 401: a API não revela quais rotas existem.
+Sem chave, até rotas inexistentes e métodos errados respondem 401 (com `WWW-Authenticate: APIKey`), como no Motor
+Python: a API não revela quais rotas existem.
 
 **Repetir ou não?** Repita só 429, 503 e 504, com espera crescente (ex.: 1 s, 2 s, 4 s). Nunca repita 4xx de
 entrada (400, 413, 422): o resultado será o mesmo.
@@ -380,7 +384,7 @@ docker run -d --name motor-net -p 8082:8080 --env-file .env.docker motor-credito
 #    Para consultar o Oracle: acrescente  -e Bancos__Provedor=oracle
 
 # 4) Conferir
-curl.exe http://localhost:8082/health/ready      # Healthy
+curl.exe http://localhost:8082/health/ready      # {"status":"ok","banco":"postgres"}
 dotnet run --project src/MotorCredito.Carga -- testar-api --url http://localhost:8082
 docker logs motor-net --tail 20
 
