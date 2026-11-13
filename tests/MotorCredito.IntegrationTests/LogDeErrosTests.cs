@@ -2,8 +2,6 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
-using Microsoft.Extensions.Logging.Abstractions;
-using MotorCredito.Api.Services;
 using MotorCredito.Core.Listas;
 using Xunit;
 
@@ -55,34 +53,18 @@ public sealed class LogDeErrosTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
-    public async Task Cada_erro_leva_a_chave_da_sua_movimentacao()
+    public async Task Cada_erro_e_gravado_junto_com_a_sua_movimentacao()
     {
         var primeira = await ClienteAutenticado().PostAsJsonAsync(Url, new { documento = "529.982.247-24" });
         var segunda = await ClienteAutenticado().GetAsync(new Uri("/nao-existe", UriKind.Relative));
 
         foreach (var resposta in new[] { primeira, segunda })
         {
-            var registro = await _fabrica.Erros.EsperarAsync(await RequestId(resposta));
-            Assert.Equal((MovimentacaoFalsa.Ano, MovimentacaoFalsa.NumeroDoHeader(resposta)), (registro.Ano, registro.Requisicao));
+            var movimentacao = await _fabrica.Movimentacao.EsperarAsync(MovimentacaoFalsa.IdDoHeader(resposta));
+            var erro = Assert.IsType<RegistroDeErro>(movimentacao.Erro);
+            Assert.Equal(await RequestId(resposta), erro.RequestId);
+            Assert.Equal(movimentacao.StatusHttp, erro.Status);
         }
-    }
-
-    [Fact]
-    public async Task Sem_numero_de_requisicao_o_erro_nao_e_gravado()
-    {
-        // Banco fora na chegada: a API segue (a resposta de erro sai normal), mas a log_erros não recebe linha sem chave.
-        _fabrica.Movimentacao.NumeracaoFalha = true;
-        var semNumero = await ClienteAutenticado().PostAsJsonAsync(Url, new { documento = "529.982.247-24" });
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, semNumero.StatusCode);
-        Assert.False(semNumero.Headers.Contains("X-Requisicao"));
-
-        // Um erro de marcação, já com número: quando ele chega, o anterior já teria chegado também.
-        _fabrica.Movimentacao.NumeracaoFalha = false;
-        var marca = await ClienteAutenticado().GetAsync(new Uri("/nao-existe", UriKind.Relative));
-        await _fabrica.Erros.EsperarAsync(await RequestId(marca));
-
-        Assert.DoesNotContain(_fabrica.Erros.Registros, r => r.RequestId == semNumero.Headers.GetValues("X-Request-ID").Single());
-        Assert.Equal([404], _fabrica.Erros.Registros.Select(r => r.Status));
     }
 
     [Fact]
@@ -162,86 +144,5 @@ public sealed class LogDeErrosTests : IClassFixture<ApiFactory>
         var registro = await _fabrica.Erros.EsperarAsync(await RequestId(resposta));
         Assert.Equal(404, registro.Status);
         Assert.Equal(200, registro.Rota.Length);
-    }
-}
-
-/// <summary>Fila e gravação em segundo plano: lotes, descarte com a fila cheia e falha do banco sem derrubar nada.</summary>
-public sealed class GravadorDeErrosTests
-{
-    private static RegistroDeErro Registro(int n) =>
-        new(2026, n, $"req-{n}", "POST", "/api/v1/triagem", 422, "entrada_invalida", "Dados inválidos.", null, 3, "Production");
-
-    private static async Task EsperarAsync(Func<bool> condicao)
-    {
-        using var prazo = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        while (!condicao())
-        {
-            await Task.Delay(10, prazo.Token);
-        }
-    }
-
-    [Fact]
-    public async Task Grava_em_lotes_de_no_maximo_cem()
-    {
-        var destino = new DestinoDeErrosFalso();
-        var fila = new FilaDeErros(NullLogger<FilaDeErros>.Instance);
-        for (var n = 0; n < 250; n++)
-        {
-            fila.Registrar(Registro(n));
-        }
-
-        using var gravador = new GravadorDeErros(fila, destino, NullLogger<GravadorDeErros>.Instance);
-        await gravador.StartAsync(CancellationToken.None);
-        await EsperarAsync(() => destino.Registros.Count == 250);
-        await gravador.StopAsync(CancellationToken.None);
-
-        Assert.Equal([100, 100, 50], destino.TamanhosDosLotes);
-        Assert.Equal("req-0", destino.Registros[0].RequestId);
-    }
-
-    [Fact]
-    public void Fila_cheia_descarta_sem_bloquear()
-    {
-        var fila = new FilaDeErros(NullLogger<FilaDeErros>.Instance, capacidade: 2);
-
-        for (var n = 0; n < 3; n++)
-        {
-            fila.Registrar(Registro(n));
-        }
-
-        Assert.Equal(1, fila.Descartados);
-    }
-
-    [Fact]
-    public async Task Falha_do_banco_perde_o_lote_e_continua()
-    {
-        var destino = new DestinoDeErrosFalso { FalharVezes = 1 };
-        var fila = new FilaDeErros(NullLogger<FilaDeErros>.Instance);
-        using var gravador = new GravadorDeErros(fila, destino, NullLogger<GravadorDeErros>.Instance);
-        await gravador.StartAsync(CancellationToken.None);
-
-        fila.Registrar(Registro(1));
-        await EsperarAsync(() => gravador.Perdidos == 1);
-        fila.Registrar(Registro(2));
-        await EsperarAsync(() => destino.Registros.Count == 1);
-        await gravador.StopAsync(CancellationToken.None);
-
-        Assert.Equal("req-2", Assert.Single(destino.Registros).RequestId);
-    }
-
-    [Fact]
-    public async Task Parar_grava_o_que_ficou_na_fila()
-    {
-        var destino = new DestinoDeErrosFalso();
-        var fila = new FilaDeErros(NullLogger<FilaDeErros>.Instance);
-        using var gravador = new GravadorDeErros(fila, destino, NullLogger<GravadorDeErros>.Instance);
-        for (var n = 0; n < 3; n++)
-        {
-            fila.Registrar(Registro(n));
-        }
-
-        await gravador.StopAsync(CancellationToken.None); // sem iniciar: tudo ainda na fila
-
-        Assert.Equal(3, destino.Registros.Count);
     }
 }

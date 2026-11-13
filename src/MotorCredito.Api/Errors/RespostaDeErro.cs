@@ -19,8 +19,11 @@ public static class RespostaDeErro
     /// <summary>Chave em HttpContext.Items com o instante de início da requisição (Stopwatch), para a duração no log.</summary>
     public const string ChaveDoInicio = "motor.inicio";
 
-    /// <summary>Chave em HttpContext.Items com (ano, requisicao) da movimentação desta requisição, se foi numerada.</summary>
+    /// <summary>Chave em HttpContext.Items com o ULID desta requisição, se ela entra na movimentação.</summary>
     public const string ChaveDaMovimentacao = "motor.movimentacao";
+
+    /// <summary>Chave em HttpContext.Items com o <see cref="RegistroDeErro"/> da resposta de erro (gravado com a movimentação).</summary>
+    public const string ChaveDoErro = "motor.erro";
 
     /// <summary>Título em português dos erros genéricos do framework (401, 404, 405). Outros: mantém o do framework.</summary>
     public static string? TituloGenerico(int status) => status switch
@@ -74,16 +77,13 @@ public static class RespostaDeErro
     }
 
     /// <summary>
-    /// Põe o erro na fila da tabela log_erros (sem esperar o banco). Só metadados: nunca o corpo. Sem número de
-    /// movimentação (rota sem movimentação ou banco fora na chegada) o erro não é gravado: a log_erros nunca tem
-    /// linha sem (ano, requisicao).
+    /// Deixa os metadados do erro no <c>HttpContext.Items</c>: o <c>MovimentacaoMiddleware</c> os grava junto com a movimentação
+    /// da requisição. Só metadados: nunca o corpo. Requisição sem movimentação (rota excluída ou sem chave de API válida)
+    /// não tem erro gravado: fica só no log da aplicação.
     /// </summary>
     private static void Registrar(HttpContext contexto, int status, string codigo, string titulo, string? tipoExcecao)
     {
-        var fila = contexto.RequestServices?.GetService<FilaDeErros>();
-        if (fila is null
-            || !contexto.Items.TryGetValue(ChaveDaMovimentacao, out var numero)
-            || numero is not ValueTuple<int, long> chave)
+        if (!contexto.Items.ContainsKey(ChaveDaMovimentacao))
         {
             return;
         }
@@ -91,10 +91,8 @@ public static class RespostaDeErro
         int? duracao = contexto.Items.TryGetValue(ChaveDoInicio, out var inicio) && inicio is long marca
             ? (int)Math.Min(int.MaxValue, Stopwatch.GetElapsedTime(marca).TotalMilliseconds)
             : null;
-        var ambiente = contexto.RequestServices!.GetService<IHostEnvironment>()?.EnvironmentName ?? "-";
-        fila.Registrar(new RegistroDeErro(
-            chave.Item1,
-            chave.Item2,
+        var ambiente = contexto.RequestServices?.GetService<IHostEnvironment>()?.EnvironmentName ?? "-";
+        contexto.Items[ChaveDoErro] = new RegistroDeErro(
             Cortar(contexto.TraceIdentifier, 64),
             Cortar(contexto.Request.Method, 10),
             Cortar(contexto.Request.Path.Value is { Length: > 0 } caminho ? caminho : "/", 200),
@@ -103,7 +101,7 @@ public static class RespostaDeErro
             Cortar(titulo, 200),
             tipoExcecao is null ? null : Cortar(tipoExcecao, 200),
             duracao,
-            Cortar(ambiente, 20)));
+            Cortar(ambiente, 20));
     }
 
     private static string Cortar(string texto, int maximo) => texto.Length <= maximo ? texto : texto[..maximo];

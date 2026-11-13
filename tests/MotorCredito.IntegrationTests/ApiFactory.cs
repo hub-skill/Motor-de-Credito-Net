@@ -17,11 +17,11 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
     public RepositorioFalso Repositorio { get; } = new();
 
-    /// <summary>Recebe o que a API grava no log de erros (no lugar da tabela log_erros).</summary>
-    public DestinoDeErrosFalso Erros { get; } = new();
-
-    /// <summary>Recebe a chegada e a resposta de cada requisição (no lugar da tabela movimentacao).</summary>
+    /// <summary>Recebe o que a API grava (no lugar das tabelas movimentacao e log_erros).</summary>
     public MovimentacaoFalsa Movimentacao { get; } = new();
+
+    /// <summary>Visão dos erros gravados junto com as movimentações (log_erros).</summary>
+    public ErrosGravados Erros => new(Movimentacao);
 
     public RelogioFixo Relogio { get; } = new(new DateTimeOffset(2026, 11, 10, 12, 0, 0, TimeSpan.Zero));
 
@@ -43,12 +43,10 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         {
             servicos.RemoveAll<IRepositorioListas>();
             servicos.AddSingleton<IRepositorioListas>(Repositorio);
-            servicos.RemoveAll<IRepositorioDeErros>();
-            servicos.AddSingleton<IRepositorioDeErros>(Erros);
             servicos.RemoveAll<IRepositorioDeMovimentacao>();
             servicos.AddSingleton<IRepositorioDeMovimentacao>(Movimentacao);
             servicos.RemoveAll<MovimentacaoOpcoes>();
-            servicos.AddSingleton(new MovimentacaoOpcoes(Movimentacao.PrazoParaNumerar, 4 * 1024));
+            servicos.AddSingleton(new MovimentacaoOpcoes(4 * 1024));
             servicos.RemoveAll<TimeProvider>();
             servicos.AddSingleton<TimeProvider>(Relogio);
         });
@@ -116,52 +114,20 @@ public sealed class RepositorioFalso : IRepositorioListas
         Falhar ? throw new BancoIndisponivelException() : Task.CompletedTask;
 }
 
-/// <summary>Destino falso do log de erros: guarda os registros e, se pedido, falha.</summary>
-public sealed class DestinoDeErrosFalso : IRepositorioDeErros
+/// <summary>Visão dos erros (log_erros) que a API gravou junto com as movimentações.</summary>
+public sealed class ErrosGravados(MovimentacaoFalsa movimentacao)
 {
-    private readonly System.Collections.Concurrent.ConcurrentQueue<RegistroDeErro> _registros = new();
+    public IReadOnlyList<RegistroDeErro> Registros => [.. movimentacao.Registros.Where(r => r.Erro is not null).Select(r => r.Erro!)];
 
-    public int FalharVezes { get; set; }
+    public void Limpar() => movimentacao.Limpar();
 
-    public List<int> TamanhosDosLotes { get; } = [];
-
-    public IReadOnlyList<RegistroDeErro> Registros => [.. _registros];
-
-    public void Limpar()
-    {
-        _registros.Clear();
-        TamanhosDosLotes.Clear();
-        FalharVezes = 0;
-    }
-
-    public Task GravarAsync(IReadOnlyList<RegistroDeErro> registros, CancellationToken cancellationToken)
-    {
-        if (FalharVezes > 0)
-        {
-            FalharVezes--;
-            throw new InvalidOperationException("banco fora: senha=abc");
-        }
-
-        lock (TamanhosDosLotes)
-        {
-            TamanhosDosLotes.Add(registros.Count);
-        }
-
-        foreach (var r in registros)
-        {
-            _registros.Enqueue(r);
-        }
-
-        return Task.CompletedTask;
-    }
-
-    /// <summary>Espera (até 5 s) chegar o registro com este request_id: a gravação é assíncrona.</summary>
+    /// <summary>Espera (até 5 s) chegar o erro com este request_id: a gravação é em segundo plano.</summary>
     public async Task<RegistroDeErro> EsperarAsync(string requestId)
     {
         using var prazo = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         while (true)
         {
-            var achado = _registros.FirstOrDefault(r => r.RequestId == requestId);
+            var achado = Registros.FirstOrDefault(r => r.RequestId == requestId);
             if (achado is not null)
             {
                 return achado;
@@ -172,89 +138,94 @@ public sealed class DestinoDeErrosFalso : IRepositorioDeErros
     }
 }
 
-/// <summary>
-/// Movimentação falsa: numera na memória (ano 2026) e guarda a chegada e a resposta de cada requisição. A
-/// numeração nunca recomeça dentro da fábrica: respostas que chegam atrasadas de um teste anterior não colidem
-/// com as do seguinte (cada teste acha a sua pelo header X-Requisicao).
-/// </summary>
+/// <summary>Repositório falso: guarda as movimentações na memória; pode falhar ou demorar, como um banco com problema.</summary>
 public sealed class MovimentacaoFalsa : IRepositorioDeMovimentacao
 {
-    public const int Ano = 2026;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, RegistroDeMovimentacao> _registros = new();
 
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, Chegada> _chegadas = new();
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, RegistroDeResposta> _respostas = new();
-    private long _ultimo;
+    /// <summary>Simula o banco fora: a gravação falha.</summary>
+    public bool Falha { get; set; }
 
-    public sealed record Chegada(string Metodo, string Rota, string? Conteudo);
+    /// <summary>Simula o banco lento: enquanto o portão não for liberado, a gravação espera.</summary>
+    public TaskCompletionSource? Portao { get; set; }
 
-    /// <summary>Simula o banco fora na chegada: a numeração falha.</summary>
-    public bool NumeracaoFalha { get; set; }
-
-    /// <summary>Simula o banco lento na chegada.</summary>
-    public TimeSpan NumeracaoAtraso { get; set; }
-
-    /// <summary>Prazo que a API espera pelo número (curto, para o teste do banco lento não demorar).</summary>
-    public TimeSpan PrazoParaNumerar { get; } = TimeSpan.FromMilliseconds(300);
-
-    public int TotalDeChegadas => _chegadas.Count;
+    public IReadOnlyList<RegistroDeMovimentacao> Registros => [.. _registros.Values];
 
     public void Limpar()
     {
-        NumeracaoFalha = false;
-        NumeracaoAtraso = TimeSpan.Zero;
+        Falha = false;
+        Portao = null;
+        _registros.Clear();
     }
 
-    public async Task<(int Ano, long Requisicao)> RegistrarRequisicaoAsync(
-        string metodo, string rota, string? conteudo, CancellationToken cancellationToken)
+    public async Task GravarAsync(IReadOnlyList<RegistroDeMovimentacao> registros, CancellationToken cancellationToken)
     {
-        if (NumeracaoFalha)
+        if (Falha)
         {
             throw new InvalidOperationException("banco fora");
         }
 
-        if (NumeracaoAtraso > TimeSpan.Zero)
+        if (Portao is { } portao)
         {
-            await Task.Delay(NumeracaoAtraso, cancellationToken);
+            await portao.Task.WaitAsync(cancellationToken);
         }
 
-        var numero = Interlocked.Increment(ref _ultimo);
-        _chegadas[numero] = new Chegada(metodo, rota, conteudo);
-        return (Ano, numero);
-    }
-
-    public Task RegistrarRespostasAsync(IReadOnlyList<RegistroDeResposta> respostas, CancellationToken cancellationToken)
-    {
-        foreach (var r in respostas)
+        foreach (var r in registros)
         {
-            _respostas[r.Requisicao] = r;
+            _registros[r.RequisicaoId] = r;
         }
-
-        return Task.CompletedTask;
     }
 
-    public Chegada? ChegadaDe(long requisicao) => _chegadas.GetValueOrDefault(requisicao);
-
-    /// <summary>Espera (até 5 s) a resposta gravada desta requisição: a gravação é assíncrona.</summary>
-    public async Task<RegistroDeResposta> EsperarRespostaAsync(long requisicao)
+    /// <summary>Espera (até 5 s) a movimentação gravada desta requisição: a gravação é em segundo plano.</summary>
+    public async Task<RegistroDeMovimentacao> EsperarAsync(string requisicaoId)
     {
         using var prazo = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         while (true)
         {
-            if (_respostas.TryGetValue(requisicao, out var resposta))
+            if (_registros.TryGetValue(requisicaoId, out var registro))
             {
-                return resposta;
+                return registro;
             }
 
             await Task.Delay(10, prazo.Token);
         }
     }
 
-    /// <summary>Número da requisição a partir do header X-Requisicao (ex.: 2026-000123 vira 123).</summary>
-    public static long NumeroDoHeader(HttpResponseMessage resposta)
+    /// <summary>ULID da requisição a partir do header X-Requisicao.</summary>
+    public static string IdDoHeader(HttpResponseMessage resposta)
     {
         ArgumentNullException.ThrowIfNull(resposta);
-        var partes = resposta.Headers.GetValues(MovimentacaoMiddleware.Header).Single().Split('-');
-        Assert.Equal(["2026", partes[1]], partes);
-        return long.Parse(partes[1], System.Globalization.CultureInfo.InvariantCulture);
+        var id = resposta.Headers.GetValues(MovimentacaoMiddleware.Header).Single();
+        Assert.True(Ulid.Valido(id), $"X-Requisicao não é um ULID: {id}");
+        return id;
+    }
+}
+
+/// <summary>Destino que só conta os lotes: para os testes da fila e do gravador em segundo plano.</summary>
+public sealed class DestinoDeLotesFalso : IRepositorioDeMovimentacao
+{
+    private readonly object _trava = new();
+
+    public int FalharVezes { get; set; }
+
+    public List<int> TamanhosDosLotes { get; } = [];
+
+    public List<RegistroDeMovimentacao> Registros { get; } = [];
+
+    public Task GravarAsync(IReadOnlyList<RegistroDeMovimentacao> registros, CancellationToken cancellationToken)
+    {
+        lock (_trava)
+        {
+            if (FalharVezes > 0)
+            {
+                FalharVezes--;
+                throw new InvalidOperationException("banco fora: senha=abc");
+            }
+
+            TamanhosDosLotes.Add(registros.Count);
+            Registros.AddRange(registros);
+        }
+
+        return Task.CompletedTask;
     }
 }

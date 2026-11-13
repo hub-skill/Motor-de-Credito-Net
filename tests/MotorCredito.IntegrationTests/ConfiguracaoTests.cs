@@ -18,6 +18,9 @@ namespace MotorCredito.IntegrationTests;
 public sealed class ApiFactoryConfiguravel(IReadOnlyDictionary<string, string> configuracao, bool repositorioFalso = true)
     : WebApplicationFactory<Program>
 {
+    /// <summary>Recebe o que a API grava (no lugar das tabelas movimentacao e log_erros).</summary>
+    public MovimentacaoFalsa Movimentacao { get; } = new();
+
     static ApiFactoryConfiguravel() => Environment.SetEnvironmentVariable(ArquivoEnv.VariavelDeControle, "off");
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -31,11 +34,9 @@ public sealed class ApiFactoryConfiguravel(IReadOnlyDictionary<string, string> c
 
         builder.ConfigureTestServices(servicos =>
         {
-            // O log de erros nunca vai para um banco real nos testes.
-            servicos.RemoveAll<IRepositorioDeErros>();
-            servicos.AddSingleton<IRepositorioDeErros>(new DestinoDeErrosFalso());
+            // A movimentação e o log de erros nunca vão para um banco real nos testes.
             servicos.RemoveAll<IRepositorioDeMovimentacao>();
-            servicos.AddSingleton<IRepositorioDeMovimentacao>(new MovimentacaoFalsa());
+            servicos.AddSingleton<IRepositorioDeMovimentacao>(Movimentacao);
             if (repositorioFalso)
             {
                 servicos.RemoveAll<IRepositorioListas>();
