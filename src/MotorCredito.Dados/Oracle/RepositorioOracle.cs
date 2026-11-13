@@ -59,16 +59,16 @@ public sealed class RepositorioOracle(OracleSettings settings) : IRepositorioLis
 
     public async Task<OrigemDados> ObterOrigemAsync(CancellationToken cancellationToken)
     {
-        // carregado_em é TIMESTAMP sem fuso, gravado na hora local do servidor.
+        // carregado_em é TIMESTAMP WITH TIME ZONE: o instante certo, sem depender do fuso de quem lê.
         var linhas = await ConsultarAsync(
             SqlOrigem,
             parametro: null,
-            static r => (Arquivo: r.GetString(0), Carregado: DateTime.SpecifyKind(r.GetDateTime(1), DateTimeKind.Local)),
+            static r => (Arquivo: r.GetString(0), Carregado: r.GetFieldValue<DateTimeOffset>(1)),
             cancellationToken).ConfigureAwait(false);
         return new OrigemDados(
             "oracle",
             linhas.Select(l => l.Arquivo).Order(StringComparer.Ordinal).ToList(),
-            linhas.Count == 0 ? null : new DateTimeOffset(linhas.Max(l => l.Carregado)));
+            linhas.Count == 0 ? null : linhas.Max(l => l.Carregado));
     }
 
     public async Task VerificarAsync(CancellationToken cancellationToken) =>

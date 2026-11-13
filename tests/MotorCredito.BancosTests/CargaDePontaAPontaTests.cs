@@ -38,7 +38,7 @@ public sealed class CargaDePontaAPontaTests
     }
 
     // Mesma ordem da ferramenta (Comandos.ScriptsDeMigracao): listas, movimentação e log de erros.
-    private static readonly string[] NomesDosScripts = ["01_schema_net.sql", "02_movimentacao.sql", "03_log_erros.sql"];
+    private static readonly string[] NomesDosScripts = ["01_schema_net.sql", "02_movimentacao.sql"];
 
     private static string[] Scripts(string banco) =>
         [.. NomesDosScripts.Select(arquivo => Path.Combine(ArquivoEnv.RaizDoRepositorio(), "banco", banco, arquivo))];

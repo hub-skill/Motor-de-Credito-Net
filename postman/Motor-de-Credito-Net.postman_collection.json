@@ -108,7 +108,8 @@
                   "pm.test(\"tem motivos, sancoes, pep e fonte\", () => {",
                   "  pm.expect(corpo).to.have.keys(\"documento\", \"tipo\", \"resultado\", \"motivos\", \"sancoes\", \"pep\", \"consultado_em\", \"fonte\");",
                   "});",
-                  "pm.test(\"X-Request-ID presente\", () => pm.expect(pm.response.headers.get(\"X-Request-ID\")).to.be.ok);"
+                  "pm.test(\"X-Request-ID presente\", () => pm.expect(pm.response.headers.get(\"X-Request-ID\")).to.be.ok);",
+                  "pm.test(\"X-Requisicao é um ULID (26 caracteres)\", () => pm.expect(pm.response.headers.get(\"X-Requisicao\")).to.match(/^[0-9A-HJKMNP-TV-Z]{26}$/));"
                 ]
               }
             }
@@ -160,6 +161,7 @@
                   "  pm.expect(corpo).to.have.keys(\"documento\", \"tipo\", \"resultado\", \"motivos\", \"sancoes\", \"pep\", \"consultado_em\", \"fonte\");",
                   "});",
                   "pm.test(\"X-Request-ID presente\", () => pm.expect(pm.response.headers.get(\"X-Request-ID\")).to.be.ok);",
+                  "pm.test(\"X-Requisicao é um ULID (26 caracteres)\", () => pm.expect(pm.response.headers.get(\"X-Requisicao\")).to.match(/^[0-9A-HJKMNP-TV-Z]{26}$/));",
                   "",
                   "pm.test(\"PEP não verificado\", () => pm.expect(corpo.pep.verificado).to.eql(false));"
                 ]
@@ -213,6 +215,7 @@
                   "  pm.expect(corpo).to.have.keys(\"documento\", \"tipo\", \"resultado\", \"motivos\", \"sancoes\", \"pep\", \"consultado_em\", \"fonte\");",
                   "});",
                   "pm.test(\"X-Request-ID presente\", () => pm.expect(pm.response.headers.get(\"X-Request-ID\")).to.be.ok);",
+                  "pm.test(\"X-Requisicao é um ULID (26 caracteres)\", () => pm.expect(pm.response.headers.get(\"X-Requisicao\")).to.match(/^[0-9A-HJKMNP-TV-Z]{26}$/));",
                   "",
                   "pm.test(\"tipo CNPJ\", () => pm.expect(corpo.tipo).to.eql(\"CNPJ\"));"
                 ]

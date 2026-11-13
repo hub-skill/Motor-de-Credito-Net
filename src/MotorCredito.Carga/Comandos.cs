@@ -35,7 +35,7 @@ internal static partial class Comandos
     public static string[] ScriptsDeMigracao(string pastaDosScripts, string banco) =>
         [.. NomesDosScripts.Select(arquivo => Path.Combine(pastaDosScripts, banco, arquivo))];
 
-    private static readonly string[] NomesDosScripts = ["01_schema_net.sql", "02_movimentacao.sql", "03_log_erros.sql"];
+    private static readonly string[] NomesDosScripts = ["01_schema_net.sql", "02_movimentacao.sql"];
 
     public static async Task<int> MigrarAsync(Opcoes opcoes, CancellationToken cancellationToken)
     {
